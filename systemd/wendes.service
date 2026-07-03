@@ -1,0 +1,12 @@
+[Unit]
+Description=Wendes: agente de IA que conduz a daily no Jitsi
+Wants=pipewire.service pipewire-pulse.service
+After=pipewire.service pipewire-pulse.service network-online.target
+
+[Service]
+Type=oneshot
+# Ajuste para o diretório onde você clonou o projeto
+WorkingDirectory=%h/wendes
+ExecStart=%h/wendes/scripts/run_wendes.sh run
+TimeoutStartSec=3600
+# unit de usuário (systemctl --user): roda como o dono, com linger habilitado

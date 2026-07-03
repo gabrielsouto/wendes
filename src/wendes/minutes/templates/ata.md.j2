@@ -1,0 +1,24 @@
+# Ata da Daily — {{ date }}
+
+**Início:** {{ started_at }} · **Sala:** {{ room_url }}
+
+## Resumo
+
+{{ summary }}
+
+## Por pessoa
+
+{% for p in people %}
+### {{ p.name }} {% if not p.present %}(ausente){% endif %}{% if p.has_blocker %} ⚠ impedimento{% endif %}
+
+{% for a in p.answers -%}
+- **{{ a.question }}** {{ a.text }}
+{% endfor %}
+{% endfor %}
+
+## Impedimentos e ações
+
+{{ action_items }}
+
+---
+_Ata gerada automaticamente pelo Wendes._

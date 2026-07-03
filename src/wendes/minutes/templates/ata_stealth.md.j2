@@ -1,0 +1,20 @@
+# Ata da Daily — {{ date }}
+
+**Início:** {{ started_at }} · **Sala:** {{ room_url }} · _modo escuta (stealth)_
+
+## Participantes
+
+{% for name in attendees -%}
+- {{ name }}
+{% endfor %}
+
+## Resumo
+
+{{ summary }}
+
+## Impedimentos e ações
+
+{{ action_items }}
+
+---
+_Ata gerada automaticamente pelo Wendes a partir da gravação da reunião._

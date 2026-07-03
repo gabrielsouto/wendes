@@ -1,0 +1,32 @@
+[project]
+name = "wendes"
+version = "0.1.0"
+description = "Agente de IA que conduz a daily no Jitsi (pt-BR): facilita falando, transcreve e distribui a ata"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.11"
+dependencies = [
+    "playwright",
+    "faster-whisper>=1.1",
+    "piper-tts",
+    "openai",
+    "pydantic-settings",
+    "jinja2",
+    "httpx",
+    "rapidfuzz",
+    "soundfile",
+    "pyyaml",
+]
+
+[project.scripts]
+wendes = "wendes.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.urls]
+Repository = "https://github.com/gabrielsouto/wendes"

@@ -1,0 +1,70 @@
+# Configuração do Wendes — copie para config.yaml e ajuste para a sua equipe.
+
+room:
+  # Aceita as duas formas (o bot autentica com o mesmo token Firebase em ambas):
+  #   https://moderated.jitsi.net/<Sala> — bot entra como moderador; equipe usa o guest link
+  #   https://meet.jit.si/<Sala>         — sala pública direta; esta URL é o próprio link da equipe
+  url: "https://meet.jit.si/MinhaSalaDaily"
+  bot_display_name: "Wendes"
+  # Espera pela abertura da conferência; no meet.jit.si sem token o bot
+  # aguarda um humano autenticado abrir a sala — aumente se for o caso.
+  join_timeout_seconds: 90
+
+team:
+  # Nome da equipe (opcional) — usado no prompt do LLM.
+  name: ""
+  # Nomes usados na chamada e casados (fuzzy) com os display names do Jitsi.
+  # aliases: outras formas como a pessoa pode aparecer no Jitsi.
+  members:
+    - name: "Fulana da Silva"
+      aliases: ["Fulana", "fsilva"]
+    - name: "Beltrano Souza"
+      aliases: ["Beltrano"]
+
+commands:
+  # Quem pode usar comandos no chat (/comece, /pular, /encerrar, /permitir, /ajuda).
+  # Fuzzy match com o display name no Jitsi. /permitir delega durante a reunião.
+  admins:
+    - "Fulana da Silva"
+  start_on_command: true   # bot só inicia a rodada após /comece no chat
+
+meeting:
+  timebox_per_person_seconds: 120
+  end_of_turn_silence_seconds: 2.0
+  quorum: 2                 # nº mínimo de participantes humanos para começar
+  wait_quorum_minutes: 10   # espera antes de desistir e avisar
+  questions:
+    - "O que você fez ontem?"
+    - "O que vai fazer hoje?"
+    - "Tem algum impedimento?"
+
+stt:
+  live_model: "small"       # faster-whisper ao vivo
+  batch_model: "medium"     # retranscrição pós-reunião
+  compute_type: "int8"
+  download_root: "models/whisper"
+  # Nomes/jargões da equipe para orientar a transcrição (initial_prompt do Whisper)
+  vocabulary: "daily, sprint, deploy, homologação"
+
+tts:
+  # Voz do Piper (baixe em https://github.com/rhasspy/piper/blob/master/VOICES.md)
+  voice_path: "models/pt_BR-faber-medium.onnx"
+  # Correções de pronúncia: {"termo escrito": "como o TTS deve falar"}
+  phonetic: {}
+
+llm:
+  # Qualquer endpoint OpenAI-compatible (vLLM, Ollama, llama.cpp, OpenAI, ...)
+  base_url: "http://localhost:8000/v1"
+  model: "meu-modelo"
+  timeout_seconds: 30
+
+distribution:
+  email_enabled: false
+  smtp_host: ""
+  smtp_port: 25
+  email_from: ""
+  email_to: []
+  # POST da ata em JSON (Slack/Discord/Teams via webhook, por exemplo)
+  webhook_url: ""
+
+data_dir: "data"

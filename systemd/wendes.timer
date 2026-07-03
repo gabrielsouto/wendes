@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara o wendes nos dias úteis no horário da daily
+
+[Timer]
+# Ajuste para o horário real da daily (o bot espera quórum por 10 min)
+OnCalendar=Mon..Fri 09:30
+Persistent=false
+
+[Install]
+WantedBy=timers.target

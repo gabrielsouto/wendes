@@ -15,6 +15,7 @@ team:
   name: ""
   # Nomes usados na chamada e casados (fuzzy) com os display names do Jitsi.
   # aliases: outras formas como a pessoa pode aparecer no Jitsi.
+  # Os nomes também alimentam os hotwords do Whisper (melhora a transcrição).
   members:
     - name: "Fulana da Silva"
       aliases: ["Fulana", "fsilva"]
@@ -39,11 +40,12 @@ meeting:
     - "Tem algum impedimento?"
 
 stt:
-  live_model: "small"       # faster-whisper ao vivo
-  batch_model: "medium"     # retranscrição pós-reunião
+  live_model: "small"           # faster-whisper ao vivo
+  batch_model: "large-v3-turbo" # retranscrição pós-reunião (baixado no 1º uso, ~1,6 GB)
   compute_type: "int8"
   download_root: "models/whisper"
-  # Nomes/jargões da equipe para orientar a transcrição (initial_prompt do Whisper)
+  # Nomes/jargões da equipe para orientar a transcrição (initial_prompt +
+  # hotwords do Whisper); os nomes de team.members entram automaticamente.
   vocabulary: "daily, sprint, deploy, homologação"
 
 tts:

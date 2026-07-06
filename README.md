@@ -10,8 +10,10 @@ Toda a IA roda **localmente** (Whisper para transcrição, Piper para voz, LLM v
 - **Facilita a daily por voz**: faz a chamada, pergunta a cada pessoa ("O que você fez ontem?", etc. — configurável), respeita timebox, detecta fim de fala por silêncio e faz follow-up de impedimentos via LLM.
 - **Comandos via chat**: `/comece`, `/pular`, `/encerrar`, `/permitir <nome>`, `/ajuda` — restritos a admins configuráveis.
 - **Modo stealth**: entra mudo, só grava e transcreve; `/fim` no chat encerra e envia a ata.
-- **Ata automática**: retranscreve a gravação com um modelo maior após a reunião, resume com o LLM e envia por e-mail (SMTP) e/ou webhook.
-- **Histórico**: cada reunião fica em `data/` com gravação, transcrição, log e ata; `wendes resummarize <data>` regera a ata sem reentrar na sala.
+- **Ata automática**: retranscreve a gravação com um modelo maior após a reunião, resume com o LLM e envia por e-mail (SMTP) e/ou webhook. Reuniões longas são condensadas em blocos antes do resumo final, e respostas que estourem o limite de tokens são continuadas automaticamente.
+- **Quem disse o quê**: no modo stealth, os eventos de *dominant speaker* do Jitsi são gravados e casados com a transcrição — a ata atribui as falas às pessoas.
+- **Transcrição orientada**: os nomes da equipe e o vocabulário do `config.yaml` viram *hotwords* do Whisper, reduzindo erros com jargões e nomes próprios.
+- **Histórico**: cada reunião fica em `data/` com gravação, transcrição (`transcript.txt`/`.json`), falantes (`speakers.json`), log e ata; `wendes resummarize <data>` regera a ata sem reentrar na sala reusando a transcrição salva (`--retranscribe` força nova transcrição; `--no-email` só regera o arquivo).
 
 ## Requisitos
 
@@ -53,7 +55,7 @@ scripts/setup_audio.sh        # cria os dispositivos de áudio virtuais (idempot
 scripts/run_wendes.sh join-test   # teste: entra na sala, fala e lista participantes
 scripts/run_wendes.sh run         # conduz a daily completa
 scripts/run_wendes.sh stealth     # só grava/transcreve; /fim encerra
-.venv/bin/wendes resummarize 2026-07-03   # regera a ata de uma data
+.venv/bin/wendes resummarize 2026-07-03   # regera a ata de uma data (--retranscribe, --no-email)
 ```
 
 ### Agendamento (systemd)

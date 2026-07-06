@@ -26,16 +26,47 @@ class Llm:
             base_url=cfg.llm.base_url, api_key="none", timeout=cfg.llm.timeout_seconds
         )
 
-    def ask(self, prompt: str, system: str | None = None, max_tokens: int = 1024) -> str:
-        resp = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system or self.system_prompt},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=max_tokens,
+    def ask(
+        self,
+        prompt: str,
+        system: str | None = None,
+        max_tokens: int = 1024,
+        timeout: float | None = None,
+        continue_on_length: bool = False,
+    ) -> str:
+        """Pergunta ao LLM; `timeout` sobrepõe o do config para chamadas longas (ata).
+
+        Com `continue_on_length`, se a resposta estourar `max_tokens` faz uma
+        rodada de continuação e concatena — a ata de reuniões longas não cabe
+        numa resposta só. As chamadas ao vivo (orçamento curto de propósito)
+        não usam isso.
+        """
+        client = self.client if timeout is None else self.client.with_options(timeout=timeout)
+        messages = [
+            {"role": "system", "content": system or self.system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+        resp = client.chat.completions.create(
+            model=self.model, messages=messages, max_tokens=max_tokens
         )
-        return (resp.choices[0].message.content or "").strip()
+        text = resp.choices[0].message.content or ""
+        if continue_on_length and resp.choices[0].finish_reason == "length":
+            log.info("Resposta atingiu max_tokens=%d — pedindo continuação", max_tokens)
+            messages += [
+                {"role": "assistant", "content": text},
+                {
+                    "role": "user",
+                    "content": "Sua resposta foi cortada no limite de tamanho. "
+                    "Continue EXATAMENTE de onde parou, sem repetir nada do que já escreveu.",
+                },
+            ]
+            cont = client.chat.completions.create(
+                model=self.model, messages=messages, max_tokens=max_tokens
+            )
+            text += cont.choices[0].message.content or ""
+            if cont.choices[0].finish_reason == "length":
+                log.warning("Resposta seguiu cortada mesmo após continuação")
+        return text.strip()
 
     def ask_or_none(self, prompt: str, **kwargs) -> str | None:
         """Versão tolerante a falha — a facilitação ao vivo usa fallback rule-based."""

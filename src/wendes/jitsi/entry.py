@@ -36,21 +36,26 @@ def with_ui_fragment(url: str, display_name: str) -> str:
     return url + sep + UI_FRAGMENT.format(name=display_name)
 
 
-async def enter_room(page: Page, cfg: Config, refresh_token: str) -> str:
-    """Entra na sala de cfg.room.url. Retorna o link a compartilhar com a equipe."""
-    host = urlparse(cfg.room.url).netloc
+async def enter_room(
+    page: Page, cfg: Config, refresh_token: str, room_url: str | None = None
+) -> str:
+    """Entra na sala (room_url, ou cfg.room.url se omitido). Retorna o link a compartilhar."""
+    room_url = room_url or cfg.room.url
+    host = urlparse(room_url).netloc
     if host == "moderated.jitsi.net":
-        return await _enter_via_moderated(page, cfg, refresh_token)
+        return await _enter_via_moderated(page, cfg, refresh_token, room_url)
     if host == "meet.jit.si":
         from wendes.jitsi.public import enter_public_room
 
-        return await enter_public_room(page, cfg, refresh_token)
+        return await enter_public_room(page, cfg, refresh_token, room_url)
     raise EntryError(
         f"Host de sala não suportado: {host!r} — use moderated.jitsi.net ou meet.jit.si"
     )
 
 
-async def _enter_via_moderated(page: Page, cfg: Config, refresh_token: str) -> str:
+async def _enter_via_moderated(
+    page: Page, cfg: Config, refresh_token: str, room_url: str
+) -> str:
     from wendes.jitsi.auth import build_room_url, exchange_refresh_token
     from wendes.jitsi.moderated import enter_moderated_room
 
@@ -61,7 +66,7 @@ async def _enter_via_moderated(page: Page, cfg: Config, refresh_token: str) -> s
     else:
         log.warning("Sem refresh token — tentando entrar como convidado")
 
-    url = build_room_url(cfg.room.url, jwt, cfg.room.bot_display_name)
+    url = build_room_url(room_url, jwt, cfg.room.bot_display_name)
     await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
     if "signin" in page.url or "auth-static" in page.url:
         raise EntryError(

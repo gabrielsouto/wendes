@@ -40,13 +40,24 @@ meeting:
     - "Tem algum impedimento?"
 
 stt:
-  live_model: "small"           # faster-whisper ao vivo
-  batch_model: "large-v3-turbo" # retranscrição pós-reunião (baixado no 1º uso, ~1,6 GB)
+  live_model: "small"     # faster-whisper ao vivo
+  # Retranscrição pós-reunião (baixado no 1º uso). "large-v3" é mais preciso
+  # em jargão/nomes que "large-v3-turbo", porém ~3-4x mais lento no CPU.
+  batch_model: "large-v3-turbo"
   compute_type: "int8"
   download_root: "models/whisper"
-  # Nomes/jargões da equipe para orientar a transcrição (initial_prompt +
-  # hotwords do Whisper); os nomes de team.members entram automaticamente.
+  # Contexto geral da transcrição (initial_prompt — só orienta o início).
   vocabulary: "daily, sprint, deploy, homologação"
+  # Termos que o modelo realmente erra — injetados em CADA janela de áudio.
+  # Mantenha curto (~10-15): lista longa dilui o efeito e induz o modelo a
+  # "ouvir" esses termos onde não existem. (Se vazio, usa vocabulary + todos
+  # os nomes da equipe, o comportamento antigo.)
+  hotwords: []
+  # Correções aplicadas depois da transcrição (palavra inteira, ignora
+  # maiúsculas). Vá acumulando aqui as confusões recorrentes que aparecerem
+  # nas atas, por exemplo:
+  #   "termo errado": "termo certo"
+  corrections: {}
 
 tts:
   # Voz do Piper (baixe em https://github.com/rhasspy/piper/blob/master/VOICES.md)

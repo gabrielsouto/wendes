@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -19,11 +20,23 @@ class TranscriptSegment:
     start: float
     end: float
     text: str
-    speaker: str = ""  # vazio quando não há evento de dominant speaker
+
+
+def normalize_transcript_text(text: str, corrections: dict[str, str] | None = None) -> str:
+    """Corrige jargões frequentes que o STT costuma confundir foneticamente."""
+    for wrong, right in (corrections or {}).items():
+        text = re.sub(rf"\b{re.escape(wrong)}\b", right, text, flags=re.IGNORECASE)
+    return text
 
 
 def stt_hotwords(cfg: Config) -> str | None:
-    """Vocabulário + nomes/aliases da equipe — aplicado a cada janela de áudio."""
+    """Termos difíceis do config — aplicados a cada janela de áudio.
+
+    Sem stt.hotwords no config, cai no comportamento antigo (vocabulário +
+    todos os nomes/aliases), que funciona mas dilui o efeito.
+    """
+    if cfg.stt.hotwords:
+        return ", ".join(cfg.stt.hotwords)
     terms: list[str] = []
     if cfg.stt.vocabulary:
         terms.append(cfg.stt.vocabulary)
@@ -45,50 +58,49 @@ def transcribe_recording(cfg: Config, wav_path: Path) -> list[TranscriptSegment]
         str(wav_path),
         language="pt",
         vad_filter=True,
+        vad_parameters={"min_silence_duration_ms": 500},
         initial_prompt=cfg.stt.vocabulary or None,
         hotwords=stt_hotwords(cfg),
+        beam_size=10,
+        temperature=0.0,
+        # Sem contexto do segmento anterior: um erro de reconhecimento não
+        # contamina os seguintes nem induz loops de repetição.
+        condition_on_previous_text=False,
     )
-    out = [TranscriptSegment(s.start, s.end, s.text.strip()) for s in segments]
+    out = [
+        TranscriptSegment(
+            s.start, s.end, normalize_transcript_text(s.text.strip(), cfg.stt.corrections)
+        )
+        for s in segments
+    ]
     log.info("Retranscrição: %d segmentos (%.1f min de áudio)", len(out), info.duration / 60)
     return out
 
 
-def save_transcript(run_dir: Path, segments: list[TranscriptSegment]) -> None:
+def save_transcript(
+    run_dir: Path,
+    segments: list[TranscriptSegment],
+    corrections: dict[str, str] | None = None,
+) -> None:
     """Grava transcript.json (para reprocessar sem retranscrever) e o .txt legível."""
+    for seg in segments:
+        seg.text = normalize_transcript_text(seg.text, corrections)
     (run_dir / "transcript.json").write_text(
         json.dumps([asdict(s) for s in segments], ensure_ascii=False, indent=1),
         encoding="utf-8",
     )
-    lines = [
-        f"[{s.start:7.1f}s] {s.speaker + ': ' if s.speaker else ''}{s.text}"
-        for s in segments
-    ]
+    lines = [f"[{s.start:7.1f}s] {s.text}" for s in segments]
     (run_dir / "transcript.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def load_transcript(run_dir: Path) -> list[TranscriptSegment] | None:
+def load_transcript(
+    run_dir: Path, corrections: dict[str, str] | None = None
+) -> list[TranscriptSegment] | None:
     path = run_dir / "transcript.json"
     if not path.exists():
         return None
     data = json.loads(path.read_text(encoding="utf-8"))
-    return [TranscriptSegment(**s) for s in data]
-
-
-def assign_speakers(
-    segments: list[TranscriptSegment], events: list[dict]
-) -> list[TranscriptSegment]:
-    """Atribui a cada segmento o dominant speaker ativo no seu ponto médio.
-
-    `events`: lista ordenada de {"t": segundos desde o início da gravação,
-    "name": nome}. Segmentos anteriores ao primeiro evento ficam sem nome.
-    """
-    if not events:
-        return segments
-    for seg in segments:
-        mid = (seg.start + seg.end) / 2
-        for ev in events:
-            if ev["t"] <= mid:
-                seg.speaker = ev.get("name", "") or seg.speaker
-            else:
-                break
-    return segments
+    out = [TranscriptSegment(**s) for s in data]
+    for seg in out:
+        seg.text = normalize_transcript_text(seg.text, corrections)
+    return out

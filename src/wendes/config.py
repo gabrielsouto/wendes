@@ -46,6 +46,12 @@ class SttConfig(BaseModel):
     compute_type: str = "int8"
     download_root: str = "models/whisper"
     vocabulary: str = ""
+    # Termos que o modelo realmente erra, injetados em cada janela de áudio.
+    # Lista curta (~10-15) — longa demais dilui o efeito e induz falsos positivos.
+    hotwords: list[str] = []
+    # Correções pós-STT: {"grafia errada recorrente": "forma correta"}.
+    # Casadas como palavra inteira, sem diferenciar maiúsculas.
+    corrections: dict[str, str] = {}
 
 
 class TtsConfig(BaseModel):

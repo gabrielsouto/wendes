@@ -1,16 +1,14 @@
 """Modo stealth: o bot entra mudo e não fala por voz.
 
 No chat, envia apenas um aviso único de gravação ao entrar (em __main__);
-depois só grava o áudio da sala, acompanha quem participou e registra os
-eventos de dominant speaker (para atribuir falas na transcrição). A sessão
-termina quando um admin envia /fim no chat (mesma lista `commands.admins` do
-config, com fuzzy match do display name). Nenhuma outra resposta é enviada.
+depois só grava o áudio da sala e acompanha quem participou. A sessão termina
+quando um admin envia /fim no chat (mesma lista `commands.admins` do config,
+com fuzzy match do display name). Nenhuma outra resposta é enviada.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-import time
 
 from rapidfuzz import fuzz
 
@@ -44,33 +42,12 @@ class StealthSession:
         self.room = room
         self.finished = asyncio.Event()
         self.attendees: dict[str, str] = {}  # participant_id -> display name
-        self._t0: float | None = None
-        self._speaker_events: list[tuple[float, str]] = []  # (elapsed, participant_id)
         room.on_chat_message(self.handle_chat)
         room.on_dominant_speaker(self._on_dominant_speaker)
 
-    def mark_start(self) -> None:
-        """Zera o relógio dos eventos de falante — chamar junto do início da captura."""
-        self._t0 = time.monotonic()
-
-    def _on_dominant_speaker(self, pid: str) -> None:
-        if self._t0 is None:
-            return
-        self._speaker_events.append((time.monotonic() - self._t0, pid))
-
-    def speaker_events(self) -> list[dict]:
-        """Eventos com nomes resolvidos pelo roster: [{"t": s, "name": display}].
-
-        Eventos do próprio bot (mudo, mas por garantia) e de pids que nunca
-        apareceram no roster com nome são descartados.
-        """
-        out: list[dict] = []
-        for t, pid in self._speaker_events:
-            display = (self.attendees.get(pid) or "").strip()
-            if not display or is_bot_display(self.cfg, display):
-                continue
-            out.append({"t": round(t, 1), "name": canonical_name(self.cfg, display)})
-        return out
+    def _on_dominant_speaker(self, pid: str, display_name: str = "") -> None:
+        if display_name.strip():
+            self.attendees[pid] = display_name
 
     def _is_admin(self, display: str) -> bool:
         return bool(display.strip()) and any(

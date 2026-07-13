@@ -190,7 +190,7 @@ async def _run() -> int:
     log.info("Reunião encerrada — gerando ata (retranscrição com modelo %s)", cfg.stt.batch_model)
     transcript = transcribe_recording(cfg, wav_path) if wav_path.exists() else None
     if transcript:
-        save_transcript(run_dir, transcript)
+        save_transcript(run_dir, transcript, cfg.stt.corrections)
     ata = generate_ata(cfg, llm, record, transcript)
     ata_path = store.save(record, ata)
     log.info("Ata salva em %s", ata_path)
@@ -199,11 +199,10 @@ async def _run() -> int:
     return 0
 
 
-async def _stealth(max_hours: float) -> int:
+async def _stealth(max_hours: float, room_url: str | None = None) -> int:
     """Modo stealth: entra mudo, grava e transcreve tudo; /fim encerra e envia a ata."""
     cfg = load_config()
 
-    import json
     from datetime import datetime
 
     from wendes.audio.capture import AudioCapture
@@ -218,11 +217,7 @@ async def _stealth(max_hours: float) -> int:
     from wendes.jitsi.room import JitsiRoom
     from wendes.llm.client import Llm
     from wendes.minutes.summarizer import generate_stealth_ata
-    from wendes.speech.stt_batch import (
-        assign_speakers,
-        save_transcript,
-        transcribe_recording,
-    )
+    from wendes.speech.stt_batch import save_transcript, transcribe_recording
 
     ensure_devices()
     store = HistoryStore(cfg)
@@ -244,7 +239,9 @@ async def _stealth(max_hours: float) -> int:
     try:
         page = await browser.start()
         try:
-            guest_url = await enter_room(page, cfg, cfg.secrets.firebase_refresh_token)
+            guest_url = await enter_room(
+                page, cfg, cfg.secrets.firebase_refresh_token, room_url=room_url
+            )
         except EntryError as exc:
             log.error("%s", exc)
             return 1
@@ -261,7 +258,6 @@ async def _stealth(max_hours: float) -> int:
 
         session = StealthSession(cfg, room)
         await capture.start()
-        session.mark_start()  # zera o relógio dos eventos de dominant speaker
         log.info("Gravando em modo stealth — /fim no chat encerra (limite %.1fh)", max_hours)
         await session.wait_finished(max_hours=max_hours)
         await room.hangup()
@@ -280,22 +276,15 @@ async def _stealth(max_hours: float) -> int:
             seen.add(name)
             record.people.append(PersonRecord(name=name, present=True))
 
-    speaker_events = session.speaker_events()
-    (run_dir / "speakers.json").write_text(
-        json.dumps(speaker_events, ensure_ascii=False, indent=1), encoding="utf-8"
-    )
-    log.info("Eventos de dominant speaker registrados: %d", len(speaker_events))
-
     log.info("Gravação encerrada — transcrevendo com o modelo %s", cfg.stt.batch_model)
     transcript = transcribe_recording(cfg, wav_path) if wav_path.exists() else None
     if transcript:
-        assign_speakers(transcript, speaker_events)
-        save_transcript(run_dir, transcript)
+        save_transcript(run_dir, transcript, cfg.stt.corrections)
     try:
         llm = Llm(cfg)
     except Exception:  # noqa: BLE001
         llm = None
-    ata = generate_stealth_ata(cfg, llm, record, transcript)
+    ata = generate_stealth_ata(cfg, llm, record, transcript, room_url=room_url)
     ata_path = store.save(record, ata)
     log.info("Ata salva em %s", ata_path)
     send_ata(cfg, ata, date)
@@ -308,14 +297,11 @@ def cmd_resummarize(
 ) -> int:
     cfg = load_config()
 
-    import json
-
     from wendes.distribution.email import send_ata
     from wendes.history.store import HistoryStore
     from wendes.llm.client import Llm
     from wendes.minutes.summarizer import generate_ata, generate_stealth_ata
     from wendes.speech.stt_batch import (
-        assign_speakers,
         load_transcript,
         save_transcript,
         transcribe_recording,
@@ -332,15 +318,11 @@ def cmd_resummarize(
     run_dir = store.run_dir(date, record.started_at)
     wav = run_dir / "recording.wav"
 
-    transcript = None if retranscribe else load_transcript(run_dir)
+    transcript = None if retranscribe else load_transcript(run_dir, cfg.stt.corrections)
     if transcript is None and wav.exists():
         print(f"Retranscrevendo {wav.name} com o modelo {cfg.stt.batch_model}…")
         transcript = transcribe_recording(cfg, wav)
-        speakers_path = run_dir / "speakers.json"
-        if speakers_path.exists():
-            events = json.loads(speakers_path.read_text(encoding="utf-8"))
-            assign_speakers(transcript, events)
-        save_transcript(run_dir, transcript)
+        save_transcript(run_dir, transcript, cfg.stt.corrections)
 
     try:
         llm = Llm(cfg)
@@ -371,6 +353,11 @@ def main() -> None:
         "--max-hours", type=float, default=4.0,
         help="limite de segurança da gravação se ninguém enviar /fim (default: 4h)",
     )
+    p_st.add_argument(
+        "--url", default=None,
+        help="URL da sala a usar no lugar de room.url do config.yaml "
+        "(moderated.jitsi.net ou meet.jit.si)",
+    )
     p_re = sub.add_parser("resummarize", help="regera a ata de uma data")
     p_re.add_argument("date", help="data no formato YYYY-MM-DD")
     p_re.add_argument("--hora", default=None, help="HH:MM de uma reunião específica (default: a última do dia)")
@@ -390,7 +377,7 @@ def main() -> None:
     if args.command == "run":
         sys.exit(asyncio.run(_run()))
     if args.command == "stealth":
-        sys.exit(asyncio.run(_stealth(args.max_hours)))
+        sys.exit(asyncio.run(_stealth(args.max_hours, room_url=args.url)))
     if args.command == "resummarize":
         sys.exit(
             cmd_resummarize(

@@ -52,10 +52,7 @@ def _glossary_instructions(cfg: Config) -> str:
 
 
 def _transcript_text(transcript: list[TranscriptSegment] | None) -> str:
-    lines = []
-    for s in transcript or []:
-        lines.append(f"{s.speaker}: {s.text}" if s.speaker else s.text)
-    return "\n".join(lines)
+    return "\n".join(s.text for s in (transcript or []))
 
 
 def _split_chunks(text: str, chunk_chars: int = CHUNK_CHARS) -> list[str]:
@@ -166,6 +163,7 @@ def generate_stealth_ata(
     llm: Llm | None,
     record: MeetingRecord,
     transcript: list[TranscriptSegment] | None,
+    room_url: str | None = None,
 ) -> str:
     """Ata do modo stealth: só há gravação/transcrição, sem respostas estruturadas."""
     attendees = [p.name for p in record.people if p.present]
@@ -179,9 +177,8 @@ def generate_stealth_ata(
             full_text = _condense(cfg, llm, full_text)
         parsed = _ask_ata(
             llm,
-            "Você recebeu a transcrição automática de uma reunião daily."
-            " Quando houver, as falas vêm prefixadas com o nome de quem falou"
-            f" (Nome: fala). Participantes na sala: "
+            "Você recebeu a transcrição automática de uma reunião daily (pode conter"
+            " erros de reconhecimento de voz). Participantes na sala: "
             f"{', '.join(attendees) or 'desconhecidos'}.\n"
             + _glossary_instructions(cfg)
             + f"\nTranscrição:\n{full_text}\n\n"
@@ -198,7 +195,7 @@ def generate_stealth_ata(
     return template.render(
         date=record.date,
         started_at=record.started_at,
-        room_url=cfg.room.url,
+        room_url=room_url or cfg.room.url,
         attendees=attendees,
         summary=summary,
         action_items=actions,

@@ -120,8 +120,11 @@ async def _resolve_auth_dialog(page: Page, timeout_s: int = 45) -> None:
         log.info("Sem diálogo de login — aguardando a conferência abrir")
 
 
-async def enter_public_room(page: Page, cfg: Config, refresh_token: str) -> str:
-    """Abre a sala pública; retorna a própria URL (é o link da equipe)."""
+async def enter_public_room(
+    page: Page, cfg: Config, refresh_token: str, room_url: str | None = None
+) -> str:
+    """Abre a sala pública (room_url, ou cfg.room.url); retorna a própria URL (link da equipe)."""
+    room_url = room_url or cfg.room.url
     if refresh_token:
         try:
             await seed_firebase_session(page, refresh_token)
@@ -132,7 +135,7 @@ async def enter_public_room(page: Page, cfg: Config, refresh_token: str) -> str:
             "Sem refresh token — como convidado, um humano logado precisa abrir a sala"
         )
 
-    url = with_ui_fragment(cfg.room.url, cfg.room.bot_display_name)
+    url = with_ui_fragment(room_url, cfg.room.bot_display_name)
     await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
     await _resolve_auth_dialog(page)
-    return cfg.room.url
+    return room_url

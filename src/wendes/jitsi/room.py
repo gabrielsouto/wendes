@@ -42,10 +42,13 @@ class JitsiRoom:
     async def install_event_bridge(self) -> None:
         """Escuta dominant-speaker e mudanças de participantes via expose_function."""
 
-        async def _on_dominant_speaker(pid: str) -> None:
+        async def _on_dominant_speaker(pid: str, display_name: str = "") -> None:
             self.dominant_speaker_id = pid
             for cb in self._speaker_listeners:
-                cb(pid)
+                try:
+                    cb(pid, display_name)
+                except TypeError:
+                    cb(pid)
 
         async def _on_chat_message(pid: str, text: str) -> None:
             log.info("Chat recebido de %s: %s", pid, text[:120])
@@ -68,10 +71,20 @@ class JitsiRoom:
                             window.botOnChatMessage(String(id), String(text));
                         }
                     };
+                    const speakerName = (id) => {
+                        try {
+                            const participant = room.getParticipantById(id);
+                            return participant && participant.getDisplayName
+                                ? participant.getDisplayName() || ''
+                                : '';
+                        } catch (e) {
+                            return '';
+                        }
+                    };
                     const listen = (ev, fallback, label) => {
                         const name = ev || fallback;
                         room.on(name, label === 'speaker'
-                            ? (id) => window.botOnDominantSpeaker(String(id))
+                            ? (id) => window.botOnDominantSpeaker(String(id), speakerName(id))
                             : forward(label));
                         out.listeners.push(name);
                     };

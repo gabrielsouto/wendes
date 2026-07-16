@@ -26,10 +26,17 @@ CHUNK_CHARS = 30000
 _FORMAT_INSTRUCTIONS = (
     "Responda em duas seções de markdown, exatamente neste formato:\n"
     "RESUMO:\n{resumo}\n"
-    "ACOES:\n<lista markdown de impedimentos e ações, cada um com responsável;"
+    "ACOES:\n<lista markdown de impedimentos e ações;"
     " se não houver, escreva 'Nenhum impedimento relatado.'>\n"
     "FIM\n"
     "(termine a resposta com a linha FIM)"
+)
+
+_NO_ATTRIBUTION = (
+    "A transcrição NÃO identifica quem está falando. NUNCA atribua uma fala,"
+    " tarefa ou impedimento a uma pessoa por dedução — cite um nome apenas se"
+    " ele aparecer explicitamente no conteúdo da própria fala (ex.: 'o Fulano"
+    " vai revisar o PR'). Na dúvida, escreva de forma impessoal.\n"
 )
 
 
@@ -81,9 +88,10 @@ def _condense(cfg: Config, llm: Llm, text: str) -> str:
             "Você recebeu um trecho da transcrição automática de uma reunião"
             f" daily (parte {i} de {len(chunks)}).\n"
             + _glossary_instructions(cfg)
+            + _NO_ATTRIBUTION
             + f"\nTrecho:\n{chunk}\n\n"
-            "Resuma em notas de markdown: o que cada pessoa relatou (feito,"
-            " planejado), decisões tomadas e impedimentos/ações com responsável."
+            "Resuma em notas de markdown, por assunto: o que foi relatado"
+            " (feito, planejado), decisões tomadas e impedimentos/ações."
             " Só inclua o que está no trecho.",
             max_tokens=1500,
             timeout=ATA_TIMEOUT_S,
@@ -141,6 +149,9 @@ def generate_ata(
             "Gere a ata da daily de hoje. Respostas estruturadas coletadas:\n"
             f"{answers}\n\n"
             + _glossary_instructions(cfg)
+            + "As respostas estruturadas acima têm autor confiável; já para a"
+            " transcrição vale o seguinte: "
+            + _NO_ATTRIBUTION
             + f"\nTranscrição completa da reunião:\n{full_text}\n\n"
             + _FORMAT_INSTRUCTIONS.format(resumo="<parágrafo curto do andamento geral>"),
         )
@@ -181,11 +192,12 @@ def generate_stealth_ata(
             " erros de reconhecimento de voz). Participantes na sala: "
             f"{', '.join(attendees) or 'desconhecidos'}.\n"
             + _glossary_instructions(cfg)
+            + _NO_ATTRIBUTION
             + f"\nTranscrição:\n{full_text}\n\n"
             "Gere a ata da reunião. "
             + _FORMAT_INSTRUCTIONS.format(
-                resumo="<parágrafos curtos com o que cada pessoa relatou (ontem,"
-                " hoje), atribuindo às pessoas quando possível>"
+                resumo="<parágrafos curtos, organizados por assunto, com o que"
+                " foi relatado (ontem, hoje)>"
             ),
         )
         if parsed:

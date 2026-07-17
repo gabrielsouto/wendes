@@ -58,17 +58,20 @@ scripts/run_wendes.sh stealth     # só grava/transcreve; /fim encerra
 .venv/bin/wendes resummarize 2026-07-03   # regera a ata de uma data (--retranscribe, --no-email)
 ```
 
-### Agendamento (systemd)
+### Em segundo plano / agendamento (systemd)
 
-Para rodar automaticamente nos dias úteis, use as units de usuário em [systemd/](systemd/):
+As units de usuário em [systemd/](systemd/) rodam o bot em segundo plano, sem depender de terminal aberto. A unit é um template: a instância escolhe o modo (`wendes@run` ou `wendes@stealth`).
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp systemd/wendes.{service,timer} ~/.config/systemd/user/
-# ajuste WorkingDirectory/ExecStart no .service e o horário no .timer
+cp systemd/wendes@.service systemd/wendes.timer ~/.config/systemd/user/
+# ajuste WorkingDirectory/ExecStart no .service, e no .timer o horário e o modo (Unit=)
 systemctl --user daemon-reload
-systemctl --user enable --now wendes.timer
-loginctl enable-linger $USER
+loginctl enable-linger $USER   # mantém o serviço vivo sem sessão aberta
+
+systemctl --user start wendes@stealth           # inicia agora, em segundo plano
+journalctl --user -u wendes@stealth -f          # acompanha os logs
+systemctl --user enable --now wendes.timer      # ou: dispara sozinho nos dias úteis
 ```
 
 ## Como funciona

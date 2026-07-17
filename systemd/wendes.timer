@@ -2,6 +2,8 @@
 Description=Dispara o wendes nos dias úteis no horário da daily
 
 [Timer]
+# Modo a disparar: wendes@run.service ou wendes@stealth.service
+Unit=wendes@run.service
 # Ajuste para o horário real da daily (o bot espera quórum por 10 min)
 OnCalendar=Mon..Fri 09:30
 Persistent=false

@@ -322,6 +322,8 @@ def cmd_resummarize(
     if transcript is None and wav.exists():
         print(f"Retranscrevendo {wav.name} com o modelo {cfg.stt.batch_model}…")
         transcript = transcribe_recording(cfg, wav)
+    if transcript:
+        # Persiste também correções novas aplicadas a uma transcrição já salva.
         save_transcript(run_dir, transcript, cfg.stt.corrections)
 
     try:

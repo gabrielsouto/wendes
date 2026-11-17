@@ -362,7 +362,10 @@ def main() -> None:
     )
     p_re = sub.add_parser("resummarize", help="regera a ata de uma data")
     p_re.add_argument("date", help="data no formato YYYY-MM-DD")
-    p_re.add_argument("--hora", default=None, help="HH:MM de uma reunião específica (default: a última do dia)")
+    p_re.add_argument(
+        "--hora", default=None,
+        help="HH:MM de uma reunião específica (default: a última do dia)",
+    )
     p_re.add_argument(
         "--retranscribe", action="store_true",
         help="retranscreve o áudio mesmo se houver transcript.json salvo",

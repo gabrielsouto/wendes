@@ -10,10 +10,8 @@ import logging
 from dataclasses import dataclass
 
 import numpy as np
-from faster_whisper import WhisperModel
-from faster_whisper.vad import VadOptions, get_speech_timestamps
 
-from wendes.audio.capture import SAMPLE_RATE, AudioCapture
+from wendes.audio.capture import AudioCapture
 from wendes.config import Config
 
 log = logging.getLogger(__name__)
@@ -27,6 +25,8 @@ class Utterance:
 
 class LiveStt:
     def __init__(self, cfg: Config) -> None:
+        from faster_whisper import WhisperModel  # import pesado: só ao criar o STT
+
         self.model = WhisperModel(
             cfg.stt.live_model,
             device="cpu",
@@ -45,6 +45,8 @@ class LiveStt:
 
     @staticmethod
     def _has_speech(pcm: bytes) -> bool:
+        from faster_whisper.vad import VadOptions, get_speech_timestamps
+
         audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
         return bool(get_speech_timestamps(audio, VadOptions(min_speech_duration_ms=200)))
 

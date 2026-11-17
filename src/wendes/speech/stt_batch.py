@@ -8,8 +8,6 @@ import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from faster_whisper import WhisperModel
-
 from wendes.config import Config
 
 log = logging.getLogger(__name__)
@@ -47,6 +45,8 @@ def stt_hotwords(cfg: Config) -> str | None:
 
 
 def transcribe_recording(cfg: Config, wav_path: Path) -> list[TranscriptSegment]:
+    from faster_whisper import WhisperModel  # import pesado: só quando transcreve
+
     model = WhisperModel(
         cfg.stt.batch_model,
         device="cpu",

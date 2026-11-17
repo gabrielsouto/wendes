@@ -88,9 +88,11 @@ class JitsiRoom:
                             : forward(label));
                         out.listeners.push(name);
                     };
-                    listen(events.DOMINANT_SPEAKER_CHANGED, 'conference.dominantSpeaker', 'speaker');
+                    listen(events.DOMINANT_SPEAKER_CHANGED,
+                           'conference.dominantSpeaker', 'speaker');
                     listen(events.MESSAGE_RECEIVED, 'conference.messageReceived', 'chat');
-                    listen(events.PRIVATE_MESSAGE_RECEIVED, 'conference.privateMessageReceived', 'private');
+                    listen(events.PRIVATE_MESSAGE_RECEIVED,
+                           'conference.privateMessageReceived', 'private');
                 } catch (e) {
                     out.errors.push(String(e));
                 }

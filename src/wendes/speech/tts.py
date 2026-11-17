@@ -6,8 +6,6 @@ import logging
 import wave
 from pathlib import Path
 
-from piper import PiperVoice
-
 from wendes.config import Config
 
 log = logging.getLogger(__name__)
@@ -15,6 +13,8 @@ log = logging.getLogger(__name__)
 
 class Tts:
     def __init__(self, cfg: Config) -> None:
+        from piper import PiperVoice  # import pesado: só ao criar o TTS
+
         self.voice = PiperVoice.load(str(cfg.resolve(cfg.tts.voice_path)))
         self.cache_dir = cfg.resolve(cfg.data_dir) / "tts_cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)

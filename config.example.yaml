@@ -55,6 +55,11 @@ stt:
   # em jargão/nomes que "large-v3-turbo", porém ~3-4x mais lento no CPU.
   batch_model: "large-v3-turbo"
   compute_type: "int8"
+  # "cpu" (padrão), "cuda" ou "auto" (usa cuda se houver GPU visível ao ctranslate2).
+  # Em cuda, prefira compute_type: "float16" (ou "int8_float16").
+  device: "cpu"
+  # Threads de CPU do Whisper, ao vivo e em lote (0 = todos os núcleos).
+  cpu_threads: 0
   download_root: "models/whisper"
   # Contexto geral da transcrição (initial_prompt — só orienta o início).
   vocabulary: "daily, sprint, deploy, homologação"
@@ -80,6 +85,11 @@ llm:
   base_url: "http://localhost:8000/v1"
   model: "meu-modelo"
   timeout_seconds: 30
+
+browser:
+  # Caminho do Chromium. Vazio: usa /usr/bin/chromium-browser se existir, senão
+  # o Chromium instalado por "playwright install chromium".
+  executable_path: ""
 
 distribution:
   email_enabled: false

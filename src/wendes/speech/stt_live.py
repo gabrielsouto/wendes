@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from wendes.config import Config
+from wendes.speech.stt_batch import resolve_stt_device, stt_cpu_threads
 
 log = logging.getLogger(__name__)
 
@@ -28,8 +29,9 @@ class LiveStt:
 
         self.model = WhisperModel(
             cfg.stt.live_model,
-            device="cpu",
+            device=resolve_stt_device(cfg),
             compute_type=cfg.stt.compute_type,
+            cpu_threads=stt_cpu_threads(cfg),
             download_root=str(cfg.resolve(cfg.stt.download_root)),
         )
         self.vocabulary = cfg.stt.vocabulary

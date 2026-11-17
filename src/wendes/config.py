@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel
@@ -44,6 +45,10 @@ class SttConfig(BaseModel):
     live_model: str = "small"
     batch_model: str = "medium"
     compute_type: str = "int8"
+    # "cpu", "cuda" ou "auto" (cuda se o ctranslate2 enxergar alguma GPU)
+    device: Literal["cpu", "cuda", "auto"] = "cpu"
+    # Threads de CPU do Whisper (ao vivo e em lote); 0 = todos os núcleos
+    cpu_threads: int = 0
     download_root: str = "models/whisper"
     vocabulary: str = ""
     # Termos que o modelo realmente erra, injetados em cada janela de áudio.
@@ -64,6 +69,11 @@ class LlmConfig(BaseModel):
     base_url: str
     model: str
     timeout_seconds: int = 30
+
+
+class BrowserConfig(BaseModel):
+    # Vazio: /usr/bin/chromium-browser se existir, senão o Chromium do Playwright
+    executable_path: str = ""
 
 
 class CommandsConfig(BaseModel):
@@ -102,6 +112,7 @@ class Config(BaseModel):
     tts: TtsConfig = TtsConfig()
     llm: LlmConfig
     commands: CommandsConfig = CommandsConfig()
+    browser: BrowserConfig = BrowserConfig()
     distribution: DistributionConfig = DistributionConfig()
     data_dir: str = "data"
 

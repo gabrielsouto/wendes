@@ -53,6 +53,22 @@ def cmd_check() -> int:
         print(f"✘ LLM ({cfg.llm.base_url} · {cfg.llm.model}): {exc}")
         ok = False
 
+    try:
+        from wendes.jitsi.browser import JitsiBrowser
+
+        version = asyncio.run(JitsiBrowser(cfg).check())
+        print(f"✔ navegador ok (Chromium {version})")
+    except Exception as exc:  # noqa: BLE001
+        print(f"✘ navegador: {exc}")
+        ok = False
+
+    from wendes.speech.stt_batch import resolve_stt_device, stt_cpu_threads
+
+    print(
+        f"ℹ STT no dispositivo {resolve_stt_device(cfg)} (stt.device={cfg.stt.device},"
+        f" {stt_cpu_threads(cfg)} threads de CPU, compute_type={cfg.stt.compute_type})"
+    )
+
     if cfg.secrets.firebase_refresh_token:
         try:
             from wendes.jitsi.auth import exchange_refresh_token
@@ -84,7 +100,7 @@ async def _join_test(stay_seconds: int) -> int:
         "Bom dia, aqui é o robô da daily. Este é um teste de integração."
     )
 
-    browser = JitsiBrowser()
+    browser = JitsiBrowser(cfg)
     try:
         page = await browser.start()
         try:
@@ -182,7 +198,7 @@ async def _run() -> int:
     record = MeetingRecord(date=date, started_at=started_at, mode="run")
     stopper = GracefulStop().install()
 
-    browser = JitsiBrowser()
+    browser = JitsiBrowser(cfg)
     capture = AudioCapture(wav_path)
     joined = False
     try:
@@ -245,7 +261,7 @@ async def _stealth(max_hours: float, room_url: str | None = None) -> int:
     record = MeetingRecord(date=date, started_at=started_at, mode="stealth")
     stopper = GracefulStop().install()
 
-    browser = JitsiBrowser()
+    browser = JitsiBrowser(cfg)
     capture = AudioCapture(wav_path)  # sem inscritos: só grava o WAV
     session: StealthSession | None = None
     joined = False

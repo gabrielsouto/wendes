@@ -96,12 +96,18 @@ class AudioCapture:
             pass
 
     async def stop(self) -> None:
+        """Para a captura; tolera o parec já morto e sempre fecha o WAV."""
         if self._task:
             self._task.cancel()
-        if self._proc:
-            self._proc.terminate()
-            await self._proc.wait()
-        if self._wav is not None:
-            self._wav.close()
-            self._wav = None
+        try:
+            if self._proc and self._proc.returncode is None:
+                try:
+                    self._proc.terminate()
+                except ProcessLookupError:
+                    pass
+                await self._proc.wait()
+        finally:
+            if self._wav is not None:
+                self._wav.close()  # fecha o cabeçalho: sem isso o WAV fica ilegível
+                self._wav = None
         log.info("Captura encerrada")

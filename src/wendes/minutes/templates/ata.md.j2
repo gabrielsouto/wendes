@@ -1,5 +1,7 @@
 # Ata da Daily — {{ date }}
-
+{% if interrupted %}
+> ⚠ Reunião interrompida: {{ error }}. A ata cobre só o que foi gravado.
+{% endif %}
 **Início:** {{ started_at }} · **Sala:** {{ room_url }}
 
 ## Resumo

@@ -99,4 +99,7 @@ class HistoryStore:
             started_at=data["started_at"],
             people=people,
             raw_utterances=data.get("raw_utterances", []),
+            interrupted=data.get("interrupted", False),
+            error=data.get("error", ""),
+            mode=data.get("mode", ""),
         )

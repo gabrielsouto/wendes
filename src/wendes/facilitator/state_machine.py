@@ -53,6 +53,9 @@ class MeetingRecord:
     started_at: str
     people: list[PersonRecord] = field(default_factory=list)
     raw_utterances: list[dict] = field(default_factory=list)
+    interrupted: bool = False  # a fase da reunião falhou no meio
+    error: str = ""  # motivo resumido da interrupção
+    mode: str = ""  # "run", "stealth" (vazio em registros antigos)
 
 
 class Facilitator:

@@ -9,6 +9,14 @@ Type=exec
 # Ajuste para o diretório onde você clonou o projeto
 WorkingDirectory=%h/wendes
 ExecStart=%h/wendes/scripts/run_wendes.sh %i
+# "systemctl stop" no meio da reunião: o ExecStop manda SIGTERM só ao Python,
+# que encerra a reunião (como /encerrar ou /fim), gera a ata e sai; só então o
+# systemd manda SIGTERM ao resto (xvfb-run, Xvfb, Chromium). Sem isso, o
+# Chromium e o Xvfb morreriam junto e a ata do modo run sairia como interrompida.
+ExecStop=%h/wendes/scripts/stop_wendes.sh $MAINPID
 # Sem limite: reunião + transcrição + ata podem passar de 1h
 TimeoutStartSec=infinity
+# A retranscrição em lote e a ata levam minutos depois do stop: dê tempo antes
+# do SIGKILL. Um segundo SIGTERM (ou o fim deste prazo) sai sem gerar a ata.
+TimeoutStopSec=1h
 # unit de usuário (systemctl --user): roda como o dono, com linger habilitado

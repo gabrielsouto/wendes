@@ -34,6 +34,11 @@ class ChatCommands:
         self.end = asyncio.Event()
         room.on_chat_message(self.handle)
 
+    def request_end(self) -> None:
+        """Encerra a reunião (mesmo caminho do /encerrar; usado também pelo SIGTERM)."""
+        self.end.set()
+        self.start.set()  # destrava caso ainda esteja aguardando /comece
+
     def _is_admin(self, pid: str, display: str) -> bool:
         if pid in self.granted_ids:
             return True
@@ -67,8 +72,7 @@ class ChatCommands:
             self.skip.set()
             await self.room.send_chat("⏭ Pulando para a próxima pessoa.")
         elif cmd == "/encerrar":
-            self.end.set()
-            self.start.set()  # destrava caso ainda esteja aguardando /comece
+            self.request_end()
             await self.room.send_chat("⏹ Encerrando a reunião e gerando a ata.")
         elif cmd == "/permitir":
             await self._grant(arg)

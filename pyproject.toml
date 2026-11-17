@@ -16,6 +16,7 @@ dependencies = [
     "rapidfuzz",
     "soundfile",
     "pyyaml",
+    "markdown",
 ]
 
 [project.optional-dependencies]

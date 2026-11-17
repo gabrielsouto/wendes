@@ -30,7 +30,7 @@ class MeetingEnded(Exception):
     """Disparada pelo /encerrar para pular direto ao fechamento."""
 
 
-_SKIPPED = object()  # sentinela: /pular durante a escuta
+_SKIPPED = object()  # sentinela: /pular durante uma etapa interrompível
 
 
 @dataclass
@@ -89,7 +89,10 @@ class Facilitator:
                 await self.room.send_chat(text)
             except Exception:  # noqa: BLE001 — chat é acessório, voz é o canal principal
                 pass
-        wav = self.tts.synthesize(P.spoken(text, self.cfg.tts.phonetic))
+        # Piper é síncrono: numa thread, para não travar o loop (/pular, /encerrar)
+        wav = await asyncio.to_thread(
+            self.tts.synthesize, P.spoken(text, self.cfg.tts.phonetic)
+        )
         await play_wav(str(wav))
 
     def _match_roster(self, display_name: str) -> Member | None:
@@ -148,28 +151,40 @@ class Facilitator:
         """Feedback imediato ao fim da fala, mascarando o tempo de transcrição."""
         await self.say(P.ACK)
 
-    async def _listen(self, max_seconds: float) -> Utterance | None | object:
-        """Escuta, mas /pular e /encerrar interrompem imediatamente."""
-        listen = asyncio.create_task(
-            self.stt.listen_utterance(
-                self.audio, max_seconds=max_seconds, on_speech_end=self._ack
-            )
-        )
+    async def _interruptible(self, coro):
+        """Disputa `coro` contra /pular e /encerrar.
+
+        /encerrar lança MeetingEnded; /pular retorna _SKIPPED. Se `coro` for
+        uma thread (asyncio.to_thread), ela segue em segundo plano e o
+        resultado é ignorado.
+        """
+        work = asyncio.ensure_future(coro)
         if self.commands is None:
-            return await listen
+            return await work
         skip = asyncio.create_task(self.commands.skip.wait())
         end = asyncio.create_task(self.commands.end.wait())
-        done, pending = await asyncio.wait(
-            {listen, skip, end}, return_when=asyncio.FIRST_COMPLETED
-        )
-        for t in pending:
-            t.cancel()
+        try:
+            done, _ = await asyncio.wait(
+                {work, skip, end}, return_when=asyncio.FIRST_COMPLETED
+            )
+        finally:
+            for t in (work, skip, end):
+                if not t.done():
+                    t.cancel()
         if end in done:
             raise MeetingEnded()
         if skip in done:
             self.commands.skip.clear()
             return _SKIPPED
-        return listen.result()
+        return work.result()
+
+    async def _listen(self, max_seconds: float) -> Utterance | None | object:
+        """Escuta, mas /pular e /encerrar interrompem imediatamente."""
+        return await self._interruptible(
+            self.stt.listen_utterance(
+                self.audio, max_seconds=max_seconds, on_speech_end=self._ack
+            )
+        )
 
     def _check_end(self) -> None:
         if self.commands is not None and self.commands.end.is_set():
@@ -254,7 +269,13 @@ class Facilitator:
                     rec.answers[-1].text += " " + extra.text
 
             if "impedimento" in question.lower():
-                analysis = analyze_blocker_answer(self.llm, member.name, utt.text)
+                # Chamada bloqueante ao LLM: numa thread e interrompível
+                analysis = await self._interruptible(
+                    asyncio.to_thread(analyze_blocker_answer, self.llm, member.name, utt.text)
+                )
+                if analysis is _SKIPPED:
+                    await self.say(P.SKIPPED)
+                    return rec
                 rec.has_blocker = analysis.has_blocker
                 if analysis.followup:
                     await self.say(

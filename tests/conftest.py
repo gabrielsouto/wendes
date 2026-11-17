@@ -28,6 +28,11 @@ class FakeRoom:
         self.private_sent: list[tuple[str, str]] = []
         self._chat_listeners: list = []
         self._speaker_listeners: list = []
+        self._level_listeners: list = []
+        self._participant_listeners: list = []
+        self.can_send_private: bool | None = True
+        self.log_text = True
+        self.muted = True
 
     async def send_chat(self, message: str) -> None:
         self.sent.append(message)
@@ -57,11 +62,31 @@ class FakeRoom:
         for cb in self._speaker_listeners:
             cb(pid, display_name)
 
+    def on_audio_levels(self, callback) -> None:
+        self._level_listeners.append(callback)
+
+    def on_participant(self, callback) -> None:
+        self._participant_listeners.append(callback)
+
+    def emit_levels(self, items: list[tuple[str, float]]) -> None:
+        for cb in self._level_listeners:
+            cb(items)
+
+    async def emit_participant(self, kind: str, pid: str, name: str = "") -> None:
+        if kind == "leave":
+            self.participants.pop(pid, None)
+        elif name:
+            self.participants[pid] = name
+        for cb in self._participant_listeners:
+            res = cb(kind, pid, name)
+            if asyncio.iscoroutine(res):
+                await res
+
     async def unmute(self) -> None:
-        pass
+        self.muted = False
 
     async def mute(self) -> None:
-        pass
+        self.muted = True
 
     async def hangup(self) -> None:
         pass
@@ -92,6 +117,58 @@ class FakeLlm:
             return self.ask(prompt, **kwargs) or None
         except Exception:  # noqa: BLE001 — mesmo contrato do Llm real
             return None
+
+
+class FakeTranscribe:
+    """Transcrição falsa: mapeia o índice do enunciado (0, 1, …) para um texto."""
+
+    def __init__(self, texts: dict[int, str] | list[str] | None = None, delay_s: float = 0.0):
+        if isinstance(texts, list):
+            texts = dict(enumerate(texts))
+        self.texts = texts or {}
+        self.delay_s = delay_s
+        self.calls: list[int] = []  # tamanho em bytes de cada enunciado recebido
+
+    def __call__(self, pcm: bytes) -> str:
+        idx = len(self.calls)
+        self.calls.append(len(pcm))
+        if self.delay_s:
+            time.sleep(self.delay_s)
+        return self.texts.get(idx, f"enunciado {idx}")
+
+
+def energy_vad(chunk: bytes) -> bool:
+    """VAD falso por energia (o Silero não reconhece senoide como fala)."""
+    import numpy as np
+
+    audio = np.frombuffer(chunk, dtype=np.int16).astype(np.float32)
+    return bool(audio.size) and float(np.sqrt(np.mean(audio**2))) > 500
+
+
+def synth_pcm(pattern: list[tuple[str, float]], rate: int = 16_000) -> bytes:
+    """Áudio sintético: [("tom", 1.5), ("silencio", 1.0), …] → PCM s16le mono."""
+    import numpy as np
+
+    parts = []
+    for kind, seconds in pattern:
+        n = int(rate * seconds)
+        if kind == "tom":
+            t = np.arange(n) / rate
+            parts.append((np.sin(2 * np.pi * 440 * t) * 8000).astype(np.int16))
+        else:
+            parts.append(np.zeros(n, dtype=np.int16))
+    return np.concatenate(parts).tobytes() if parts else b""
+
+
+def write_wav(path, pcm: bytes, rate: int = 16_000):
+    import wave
+
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    return path
 
 
 def _deep_merge(base: dict, extra: dict) -> dict:

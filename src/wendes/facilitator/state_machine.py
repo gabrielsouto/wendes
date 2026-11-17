@@ -58,6 +58,16 @@ class MeetingRecord:
     mode: str = ""  # "run", "stealth" (vazio em registros antigos)
 
 
+def question_budget(
+    timebox_s: float, n_questions: int, idx: int, used_s: float, min_s: float
+) -> float:
+    """Tempo de escuta da pergunta `idx`: o que resta da pessoa dividido pelas
+    perguntas que faltam (incluindo esta), com piso em `min_s`."""
+    remaining_questions = max(1, n_questions - idx)
+    remaining_s = max(0.0, timebox_s - used_s)
+    return max(float(min_s), remaining_s / remaining_questions)
+
+
 class Facilitator:
     def __init__(
         self,
@@ -237,20 +247,25 @@ class Facilitator:
         # registra já no início: um /encerrar no meio da vez preserva o parcial
         self.record.people.append(rec)
         timebox = self.cfg.meeting.timebox_per_person_seconds
-        per_question = max(60, timebox // max(1, len(self.cfg.meeting.questions)))
+        questions = self.cfg.meeting.questions
+        used_s = 0.0  # tempo de fala/escuta já consumido pela pessoa
 
-        for i, question in enumerate(self.cfg.meeting.questions):
+        for i, question in enumerate(questions):
+            budget = question_budget(
+                timebox, len(questions), i, used_s, self.cfg.meeting.min_seconds_per_question
+            )
             prompt = (
                 P.ASK_PERSON.format(name=member.name, question=question)
                 if i == 0
                 else P.NEXT_QUESTION.format(question=question)
             )
             await self.say(prompt, chat=True)
-            utt = await self._listen(max_seconds=per_question)
+            utt = await self._listen(max_seconds=budget)
             if utt is _SKIPPED:
                 await self.say(P.SKIPPED)
                 return rec
             if utt is None:
+                used_s += budget  # esperou o orçamento inteiro em silêncio
                 if i == 0:
                     await self.say(P.NO_ANSWER.format(name=member.name))
                     return rec
@@ -259,13 +274,15 @@ class Facilitator:
             self.record.raw_utterances.append(
                 {"speaker": member.name, "question": question, "text": utt.text}
             )
-            if utt.duration_s >= per_question:
+            used_s += utt.duration_s
+            if utt.duration_s >= budget:
                 await self.say(P.TIMEBOX_WARNING.format(name=member.name))
                 extra = await self._listen(max_seconds=20)
                 if extra is _SKIPPED:
                     await self.say(P.SKIPPED)
                     return rec
                 if extra:
+                    used_s += extra.duration_s
                     rec.answers[-1].text += " " + extra.text
 
             if "impedimento" in question.lower():
@@ -286,6 +303,7 @@ class Facilitator:
                         await self.say(P.SKIPPED)
                         return rec
                     if detail:
+                        used_s += detail.duration_s
                         rec.answers.append(
                             Answer(question=analysis.followup, text=detail.text)
                         )

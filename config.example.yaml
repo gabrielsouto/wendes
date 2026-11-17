@@ -40,7 +40,12 @@ commands:
   start_on_command: true   # bot só inicia a rodada após /comece no chat
 
 meeting:
+  # Tempo total de cada pessoa. É repartido entre as perguntas que faltam:
+  # resposta rápida deixa mais tempo para as seguintes. O aviso de tempo (+20 s)
+  # e o follow-up de impedimento (até 45 s) também contam nesse total.
   timebox_per_person_seconds: 120
+  # Piso por pergunta, mesmo quando o tempo da pessoa já acabou.
+  min_seconds_per_question: 30
   end_of_turn_silence_seconds: 2.0
   quorum: 2                 # nº mínimo de participantes humanos para começar
   wait_quorum_minutes: 10   # espera antes de desistir e avisar

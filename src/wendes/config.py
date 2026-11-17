@@ -31,6 +31,8 @@ class TeamConfig(BaseModel):
 
 class MeetingConfig(BaseModel):
     timebox_per_person_seconds: int = 120
+    # Piso de escuta por pergunta, mesmo com o timebox da pessoa esgotado
+    min_seconds_per_question: int = 30
     end_of_turn_silence_seconds: float = 2.0
     quorum: int = 2
     wait_quorum_minutes: int = 10

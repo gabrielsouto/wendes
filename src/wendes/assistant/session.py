@@ -13,7 +13,10 @@ import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from wendes.assistant import prompts_ptbr as P
+from wendes.assistant.llm_queue import HUMAN, LlmScheduler, ask_json, est
 from wendes.assistant.policy import Policy
 from wendes.assistant.speakers import SpeakerTracker
 from wendes.assistant.state import GAP_TEXT, MeetingState, Segment, mmss
@@ -25,6 +28,12 @@ from wendes.facilitator.auth import AdminAuth
 log = logging.getLogger(__name__)
 
 ROSTER_POLL_SECONDS = 15.0
+
+
+class Recap(BaseModel):
+    texto: str
+    falado: str = ""
+
 STATUS_TICK_SECONDS = 2.0
 SpeakFn = Callable[[str], Awaitable[None]]
 SegmentHook = Callable[[Segment], Awaitable[None]]
@@ -104,6 +113,34 @@ class AssistantSession:
         room.on_chat_message(self.handle_chat)
         room.on_participant(self._on_participant)
 
+        # ---- LLM: fila única com prioridade, notas vivas -----------------
+        self.system = P.system(self.bot_name, cfg.team.name)
+        self.scheduler = LlmScheduler(
+            cfg.llm.max_concurrency,
+            timeout_s=max(60.0, cfg.llm.timeout_seconds * 3.0),
+            telemetry_path=run_dir / "llm_calls.jsonl" if state.persist else None,
+            on_change=self._on_llm_queue,
+        )
+        self.idle_hooks.append(self.scheduler.join)
+        self.notes = None
+        if llm is not None:
+            from wendes.assistant.notes import NotesUpdater
+
+            n = self.a.notes
+            self.notes = NotesUpdater(
+                state, self.scheduler, llm,
+                system=self.system,
+                context_tokens=cfg.llm.context_tokens,
+                interval_s=n.interval_s,
+                min_new_chars=n.min_new_chars,
+                compact_every_s=n.compact_every_s,
+                structured_mode=cfg.llm.structured_output,
+                vllm_key=cfg.llm.vllm_guided_key,
+                owner_names={m.name for m in cfg.team.members},
+                min_conf=self.a.speakers.min_share,
+            )
+            self.segment_hooks.append(self.notes.on_segment)
+
         self.web = None
         if web:
             from wendes.assistant.web.server import WebServer
@@ -144,6 +181,9 @@ class AssistantSession:
                               self.a.web.port)
                 self.web = None
         await self.auth.publish_code()
+        self.scheduler.start()
+        if self.notes is not None:
+            self.spawn(self.notes.loop(), "notes")
         self.spawn(self.transcriber.run(), "transcriber")
         self.spawn(self._poll_roster(), "roster")
         self.spawn(self._status_ticker(), "status")
@@ -181,7 +221,14 @@ class AssistantSession:
         for hook in self.idle_hooks:
             await hook()
 
+    def _on_llm_queue(self, size: int) -> None:
+        self.state.llm_queue = size
+
     async def stop(self) -> None:
+        if self.notes is not None:
+            await self.notes.final_round()  # o que sobrou da transcrição ao vivo
+            await self.notes.close()
+        await self.scheduler.close()
         self.state.set_status("finished")
         for task in self._tasks:
             task.cancel()
@@ -406,6 +453,66 @@ class AssistantSession:
             await self.reply(pid, private, P.LINK_PUBLIC_REFUSED)
             return
         await self.room.send_private(pid, P.LINK_PRIVATE.format(url=self.web.page_url()))
+
+    # ---- LLM: utilitários -------------------------------------------------
+    async def with_thinking(self, fut, *, voice: bool, pid: str, private: bool):
+        """Espera o resultado; passando de 2 s, dá um sinal imediato (chat ou voz)."""
+        task = asyncio.ensure_future(fut)
+        done, _ = await asyncio.wait({task}, timeout=2.0)
+        if not done:
+            if voice and self.a.voice_answers and self.speak_fn is not None:
+                await self.say(P.THINKING_VOICE)
+            else:
+                await self.reply(pid, private, P.THINKING_CHAT)
+        return await task
+
+    def chat_text(self, text: str) -> str:
+        if len(text) > P.CHAT_LIMIT:
+            return text[: P.CHAT_LIMIT].rstrip() + P.TRUNCATED
+        return text
+
+    # ---- resumo e ações (F6) ---------------------------------------------
+    async def cmd_resumo(self, pid, display, cmd, private, voice: bool = False) -> None:
+        if not voice and not self.policy.can_ask(pid, display):
+            await self.deny(pid, display, private, "pedir o resumo")
+            return
+        from wendes.assistant.notes import Notes, full_view, recap_fallback
+
+        notes = self.notes.notes if self.notes is not None else Notes()
+        who = display or "alguém na sala (não identificado)"
+        header = f"↳ {who}: resumo até agora"
+        if self.llm is None:
+            await self.reply(pid, private, f"{header}\n{recap_fallback(notes)}\n({P.LLM_DOWN})")
+            return
+        prompt = P.RECAP.format(notas="\n".join(full_view(notes)) or "(ainda sem notas)")
+
+        def call():
+            return ask_json(
+                self.llm, prompt, Recap, system=self.system,
+                mode=self.cfg.llm.structured_output, vllm_key=self.cfg.llm.vllm_guided_key,
+                max_tokens=500,
+            )
+
+        fut = self.scheduler.submit(HUMAN, "resumo", call, est_tokens=est(prompt, 500))
+        try:
+            recap = await self.with_thinking(fut, voice=voice, pid=pid, private=private)
+        except Exception:  # noqa: BLE001
+            recap = None
+        if recap is None:
+            await self.reply(pid, private, f"{header}\n{recap_fallback(notes)}")
+            return
+        await self.reply(pid, private, self.chat_text(f"{header}\n{recap.texto}"))
+        if voice and self.a.voice_answers:
+            await self.say(recap.falado)
+
+    async def cmd_acoes(self, pid, display, cmd, private) -> None:
+        if not self.policy.can_ask(pid, display):
+            await self.deny(pid, display, private, "ver as ações")
+            return
+        from wendes.assistant.notes import Notes, actions_text
+
+        notes = self.notes.notes if self.notes is not None else Notes()
+        await self.reply(pid, private, self.chat_text(actions_text(notes)))
 
     async def cmd_fim(self, pid, display, cmd, private) -> None:
         if not self.policy.is_admin(pid, display):

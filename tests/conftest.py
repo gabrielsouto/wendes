@@ -100,13 +100,21 @@ class FakeLlm:
     delay_s: float = 0.0
     fail: bool = False
     prompts: list[str] = field(default_factory=list)
+    # Respostas roteirizadas por tipo de chamada: {trecho do prompt: [respostas]}.
+    # A primeira rota cujo trecho aparece no prompt responde (a última se repete).
+    routes: dict[str, list[str]] = field(default_factory=dict)
+    kwargs: list[dict] = field(default_factory=list)
 
     def ask(self, prompt: str, **kwargs: Any) -> str:
         self.prompts.append(prompt)
+        self.kwargs.append(kwargs)
         if self.delay_s:
             time.sleep(self.delay_s)  # simula a chamada bloqueante do cliente OpenAI
         if self.fail:
             raise RuntimeError("LLM fora do ar")
+        for marker, answers in self.routes.items():
+            if marker in prompt and answers:
+                return answers.pop(0) if len(answers) > 1 else answers[0]
         if not self.responses:
             return ""
         resp = self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]

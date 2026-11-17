@@ -79,6 +79,97 @@ def batch_transcript(cfg: Config, run_dir: Path, wav_path: Path) -> list[Transcr
     return transcript
 
 
+_env = None
+
+
+def _jinja():
+    global _env
+    if _env is None:
+        from jinja2 import Environment, FileSystemLoader
+
+        from wendes.assistant.state import mmss
+
+        _env = Environment(
+            loader=FileSystemLoader(Path(__file__).parent / "templates"),
+            trim_blocks=False,
+            lstrip_blocks=False,
+        )
+        _env.filters["mmss"] = lambda t: mmss(float(t or 0))
+        _env.filters["cell"] = lambda s: str(s).replace("|", "\\|").replace("\n", " ")
+    return _env
+
+
+def load_notes(run_dir: Path):
+    import json
+
+    from wendes.assistant.notes import Notes
+
+    path = run_dir / "notes.json"
+    if not path.exists():
+        return Notes()
+    try:
+        return Notes.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    except ValueError:
+        log.warning("notes.json ilegível — ata sem notas")
+        return Notes()
+
+
+def ata_summary(cfg: Config, llm, notes) -> str:
+    from wendes.assistant import prompts_ptbr as P
+    from wendes.assistant.notes import full_view, recap_fallback
+
+    lines = full_view(notes)
+    if not lines:
+        return "A reunião não gerou notas (pouca fala transcrita ou LLM indisponível)."
+    if llm is not None:
+        from wendes.assistant.budget import Part, fit
+
+        budget = max(1000, cfg.llm.context_tokens - 1200)
+        text = "\n".join(fit([Part("n", lines, budget)], budget)["n"])
+        resp = llm.ask_or_none(
+            P.ATA_SUMMARY.format(notas=text),
+            system=P.system(cfg.room.bot_display_name, cfg.team.name),
+            max_tokens=600,
+            timeout=180.0,
+        )
+        if resp:
+            return resp.strip()
+    return recap_fallback(notes)
+
+
+def build_ata(
+    cfg: Config,
+    llm,
+    record: MeetingRecord,
+    state: MeetingState,
+    *,
+    room_url: str | None,
+    duration_s: float,
+    page_path: Path | None = None,
+) -> str:
+    from wendes.assistant.state import mmss
+
+    notes = load_notes(state.run_dir) if state.run_dir else None
+    if notes is None:
+        from wendes.assistant.notes import Notes
+
+        notes = Notes()
+    return _jinja().get_template("ata_assist.md.j2").render(
+        date=record.date,
+        started_at=record.started_at,
+        duration=mmss(duration_s),
+        room_url=room_url or cfg.room.url,
+        attendees=[p.name for p in record.people if p.present],
+        interrupted=record.interrupted,
+        error=record.error,
+        summary=ata_summary(cfg, llm, notes),
+        notes=notes,
+        artifacts=state.artifacts,
+        qa=state.qa,
+        page_path=str(page_path) if page_path else "",
+    )
+
+
 def finalize_assist(
     cfg: Config,
     store,
@@ -91,12 +182,13 @@ def finalize_assist(
     llm=None,
     state: MeetingState | None = None,
 ) -> Path:
-    from wendes.minutes.summarizer import generate_stealth_ata
+    from wendes.pipeline import wav_seconds
 
     record.mode = "assist"
     state = state or MeetingState.load(run_dir, date=record.date, started_at=record.started_at)
-    transcript = batch_transcript(cfg, run_dir, wav_path)
-    ata = generate_stealth_ata(cfg, llm, record, transcript, room_url=room_url)
+    duration = wav_seconds(wav_path) or (state.segments[-1].end if state.segments else 0.0)
+    batch_transcript(cfg, run_dir, wav_path)
+    ata = build_ata(cfg, llm, record, state, room_url=room_url, duration_s=duration)
     return _save_and_distribute(cfg, store, run_dir, record, ata, distribute)
 
 

@@ -98,3 +98,71 @@ RETRY = (
 
 def system(bot: str, team: str = "") -> str:
     return SYSTEM.format(bot=bot, team=f" {team}" if team else "")
+
+
+# ---- notas vivas (F2) -------------------------------------------------------------
+NOTES_OPS = """Você mantém as NOTAS VIVAS de uma reunião. Recebe as notas atuais (resumidas)
+e os trechos NOVOS da transcrição. Devolva APENAS operações para acrescentar o que é
+novo e relevante. Não repita o que já está nas notas. Se nada for relevante, devolva
+{{"ops": []}}.
+
+Operações possíveis:
+- {{"op": "add_point", "topico": "<assunto curto>", "texto": "<ponto>", "ts": "mm:ss"}}
+- {{"op": "add_decision", "texto": "<decisão tomada>", "ts": "mm:ss"}}
+- {{"op": "add_action", "descricao": "<tarefa>", "responsavel": "<nome ou vazio>",
+   "prazo": "<prazo ou vazio>", "ts": "mm:ss"}}
+- {{"op": "update_action", "id": "<A1 ou P1>", "status": "concluida|cancelada|mencionada",
+   "evidencia_ts": "mm:ss"}}  (para ações desta reunião A* ou pendências anteriores P*)
+- {{"op": "add_open_question", "texto": "<pergunta que ficou sem resposta>", "ts": "mm:ss"}}
+
+Regras:
+- "ts" é o tempo [mm:ss] do trecho que sustenta a operação.
+- Reaproveite o título de um tópico existente quando o assunto for o mesmo.
+- "responsavel" só quando o falante identificado se comprometeu ("eu vou…") ou o nome
+  aparece explicitamente na fala; caso contrário, "".
+- Decisão é só o que foi efetivamente decidido, não sugestões.
+- Seja conciso: pontos de até uma frase.
+
+Exemplo: {{"ops": [{{"op": "add_point", "topico": "Evento de clientes", "texto": "Local
+definido: auditório", "ts": "13:32"}}, {{"op": "add_action", "descricao": "Reservar o
+auditório", "responsavel": "", "prazo": "sexta", "ts": "14:20"}}]}}
+
+<notas>
+{notas}
+</notas>
+
+<transcricao>
+{trechos}
+</transcricao>"""
+
+NOTES_COMPACT = """Abaixo estão os pontos numerados de um tópico das notas de uma reunião.
+Funda pontos DUPLICADOS ou muito parecidos, sem perder nenhuma informação. Cada ponto
+novo indica em "de" os números dos pontos originais que ele cobre. TODO número original
+precisa aparecer em algum "de". Não invente nada.
+
+Exemplo: {{"pontos": [{{"texto": "Local definido: auditório do 2º andar", "ts": "13:32",
+"de": [1, 3]}}, {{"texto": "Data fechada em 12/12", "ts": "14:05", "de": [2]}}]}}
+
+Tópico: {titulo}
+<notas>
+{pontos}
+</notas>"""
+
+RECAP = """Faça um recap da reunião ATÉ AGORA a partir das notas abaixo (não há
+transcrição). Em "texto": até 12 linhas em markdown com tópicos, decisões e ações (com
+responsável quando houver). Em "falado": 2 ou 3 frases curtas para ler em voz alta.
+
+Exemplo: {{"texto": "**Tópicos:** evento de clientes…\\n**Decisões:** data 12/12\\n**Ações:**
+reservar o auditório (sem responsável)", "falado": "Até agora falamos do evento…"}}
+
+<notas>
+{notas}
+</notas>"""
+
+ATA_SUMMARY = """Escreva o resumo da ata desta reunião em até 2 parágrafos curtos, em
+prosa, a partir das notas finais abaixo. Não invente nada e não atribua falas a
+pessoas que não estejam nas notas. Responda só com o texto do resumo.
+
+<notas>
+{notas}
+</notas>"""

@@ -90,6 +90,8 @@ class Secrets(BaseSettings):
     model_config = SettingsConfigDict(env_file=PROJECT_ROOT / ".env", extra="ignore")
     firebase_refresh_token: str = ""
     smtp_password: str = ""
+    # Chave do endpoint LLM (OpenAI e afins); vazio para vLLM/Ollama locais.
+    llm_api_key: str = ""
 
 
 class Config(BaseModel):

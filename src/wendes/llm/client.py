@@ -23,7 +23,9 @@ class Llm:
         team = f" {cfg.team.name}" if cfg.team.name else ""
         self.system_prompt = SYSTEM_PROMPT.format(team=team)
         self.client = OpenAI(
-            base_url=cfg.llm.base_url, api_key="none", timeout=cfg.llm.timeout_seconds
+            base_url=cfg.llm.base_url,
+            api_key=cfg.secrets.llm_api_key or "none",  # endpoints locais ignoram a chave
+            timeout=cfg.llm.timeout_seconds,
         )
 
     def ask(

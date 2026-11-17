@@ -48,9 +48,9 @@ def cmd_check() -> int:
         from wendes.llm.client import Llm
 
         resp = Llm(cfg).ask("Responda apenas: ok", max_tokens=10)
-        print(f"✔ vLLM ok ({resp[:40]!r})")
+        print(f"✔ LLM ok — {cfg.llm.base_url} · {cfg.llm.model} ({resp[:40]!r})")
     except Exception as exc:  # noqa: BLE001
-        print(f"✘ vLLM: {exc}")
+        print(f"✘ LLM ({cfg.llm.base_url} · {cfg.llm.model}): {exc}")
         ok = False
 
     if cfg.secrets.firebase_refresh_token:

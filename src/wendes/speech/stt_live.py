@@ -1,7 +1,7 @@
 """STT ao vivo: VAD (Silero via faster-whisper/onnx) + whisper small int8.
 
-Consome chunks PCM da captura, detecta fim de fala por silêncio e devolve
-utterances transcritas.
+Consome chunks PCM de uma fila inscrita na captura (AudioCapture.subscribe),
+detecta fim de fala por silêncio e devolve utterances transcritas.
 """
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from wendes.audio.capture import AudioCapture
 from wendes.config import Config
 
 log = logging.getLogger(__name__)
@@ -52,7 +51,7 @@ class LiveStt:
 
     async def listen_utterance(
         self,
-        capture: AudioCapture,
+        chunks: asyncio.Queue[bytes],
         max_seconds: float,
         min_speech_chunks: int = 1,
         on_speech_end=None,
@@ -71,12 +70,12 @@ class LiveStt:
         chunk_s = 0.5
 
         # descarta áudio acumulado enquanto o bot falava
-        while not capture.chunks.empty():
-            capture.chunks.get_nowait()
+        while not chunks.empty():
+            chunks.get_nowait()
 
         while elapsed < max_seconds:
             try:
-                chunk = await asyncio.wait_for(capture.chunks.get(), timeout=5)
+                chunk = await asyncio.wait_for(chunks.get(), timeout=5)
             except asyncio.TimeoutError:
                 elapsed += 5
                 continue

@@ -69,6 +69,8 @@ class Facilitator:
         self.cfg = cfg
         self.room = room
         self.capture = capture
+        # Fila própria de áudio: só existe enquanto há quem escute (modo run).
+        self.audio = capture.subscribe()
         self.tts = tts
         self.stt = stt
         self.llm = llm
@@ -147,7 +149,7 @@ class Facilitator:
         """Escuta, mas /pular e /encerrar interrompem imediatamente."""
         listen = asyncio.create_task(
             self.stt.listen_utterance(
-                self.capture, max_seconds=max_seconds, on_speech_end=self._ack
+                self.audio, max_seconds=max_seconds, on_speech_end=self._ack
             )
         )
         if self.commands is None:

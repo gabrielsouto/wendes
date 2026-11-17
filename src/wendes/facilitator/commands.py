@@ -1,17 +1,20 @@
 """Comandos via chat da sala, restritos a administradores.
 
-Admins iniciais vêm de `commands.admins` no config (fuzzy match com o display
-name). `/permitir <nome>` delega a permissão a outro participante presente —
-válido para a reunião corrente (o nome entra na lista de admins da sessão).
+Quem é admin é decidido por `AdminAuth` (wendes.facilitator.auth): por padrão,
+quem mandou `/auth <código>` em privado ao bot. `/permitir <nome>` delega a
+permissão a outro participante presente — pelo id dele, válido para a reunião
+corrente.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 
 from rapidfuzz import fuzz
 
 from wendes.config import Config
+from wendes.facilitator.auth import AUTH_HELP, AdminAuth
 from wendes.jitsi.room import JitsiRoom
 
 log = logging.getLogger(__name__)
@@ -20,15 +23,14 @@ HELP_TEXT = (
     "Comandos do wendes (somente admins): "
     "/comece inicia a rodada · /pular (ou /proximo) pula a pessoa da vez · "
     "/encerrar encerra e gera a ata · /permitir <nome> dá permissão a outro participante · "
-    "/ajuda mostra esta mensagem"
+    "/ajuda mostra esta mensagem · " + AUTH_HELP
 )
 
 
 class ChatCommands:
-    def __init__(self, cfg: Config, room: JitsiRoom) -> None:
+    def __init__(self, cfg: Config, room: JitsiRoom, run_dir: Path | None = None) -> None:
         self.room = room
-        self.admin_names: list[str] = list(cfg.commands.admins)
-        self.granted_ids: set[str] = set()
+        self.auth = AdminAuth(cfg, room, run_dir)
         self.start = asyncio.Event()
         self.skip = asyncio.Event()
         self.end = asyncio.Event()
@@ -39,30 +41,26 @@ class ChatCommands:
         self.end.set()
         self.start.set()  # destrava caso ainda esteja aguardando /comece
 
-    def _is_admin(self, pid: str, display: str) -> bool:
-        if pid in self.granted_ids:
-            return True
-        return any(
-            fuzz.partial_ratio(a.lower(), display.lower()) >= 85
-            for a in self.admin_names
-            if display.strip()
-        )
-
-    async def handle(self, pid: str, text: str) -> None:
+    async def handle(self, pid: str, text: str, private: bool = False) -> None:
         text = text.strip()
         if not text.startswith("/"):
             return
-        display = await self.room.get_display_name(pid)
-        if not self._is_admin(pid, display):
-            log.info("Comando de não-admin ignorado (%s): %s", display or pid, text)
-            await self.room.send_chat(
-                f"{display or 'Participante'}: você não tem permissão para comandos."
-            )
-            return
-
         cmd, _, arg = text.partition(" ")
         cmd = cmd.lower()
         arg = arg.strip()
+        if cmd == "/auth":
+            await self.auth.handle_auth(pid, arg, private)
+            return
+
+        display = await self.room.get_display_name(pid)
+        if not self.auth.is_admin(pid, display):
+            log.info("Comando de não-admin ignorado (%s): %s", display or pid, text)
+            hint = f" Admins: {AUTH_HELP}." if self.auth.require_code else ""
+            await self.room.send_chat(
+                f"{display or 'Participante'}: você não tem permissão para comandos.{hint}"
+            )
+            return
+
         log.info("Comando de %s: %s %s", display or pid, cmd, arg)
 
         if cmd == "/comece":
@@ -97,6 +95,5 @@ class ChatCommands:
         if best is None or best_score < 70:
             await self.room.send_chat(f"Não encontrei participante parecido com '{name}'.")
             return
-        self.granted_ids.add(best.id)
-        self.admin_names.append(best.display_name)
+        self.auth.grant(best.id)
         await self.room.send_chat(f"✔ {best.display_name} agora pode usar comandos.")

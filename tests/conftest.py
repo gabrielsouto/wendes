@@ -25,11 +25,15 @@ class FakeRoom:
         # participant_id -> display name
         self.participants: dict[str, str] = dict(participants or {})
         self.sent: list[str] = []
+        self.private_sent: list[tuple[str, str]] = []
         self._chat_listeners: list = []
         self._speaker_listeners: list = []
 
     async def send_chat(self, message: str) -> None:
         self.sent.append(message)
+
+    async def send_private(self, participant_id: str, message: str) -> None:
+        self.private_sent.append((participant_id, message))
 
     async def list_participants(self) -> list[FakeParticipant]:
         return [FakeParticipant(pid, name) for pid, name in self.participants.items()]
@@ -45,7 +49,7 @@ class FakeRoom:
 
     async def emit_chat(self, pid: str, text: str, private: bool = False) -> None:
         for cb in self._chat_listeners:
-            res = cb(pid, text)
+            res = cb(pid, text, private)
             if asyncio.iscoroutine(res):
                 await res
 

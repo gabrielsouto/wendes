@@ -98,7 +98,8 @@ async def _join_test(stay_seconds: int) -> int:
         await room.install_event_bridge()
         from wendes.facilitator.commands import ChatCommands
 
-        ChatCommands(cfg, room)  # permite testar /ajuda, /comece etc. no chat
+        commands = ChatCommands(cfg, room)  # permite testar /auth, /ajuda etc. no chat
+        await commands.auth.publish_code()
         await room.send_chat("Bot de teste na sala — envie /ajuda para testar os comandos.")
         await room.unmute()
         await asyncio.sleep(2)
@@ -201,7 +202,8 @@ async def _run() -> int:
         await room.unmute()
         await capture.start()
 
-        commands = ChatCommands(cfg, room)
+        commands = ChatCommands(cfg, room, run_dir)
+        await commands.auth.publish_code()
         stopper.on_meeting_stop(commands.request_end)  # SIGTERM = /encerrar
         facilitator = Facilitator(cfg, room, capture, tts, stt, llm, commands)
         facilitator.record = record  # mesmo objeto: o parcial sobrevive a falhas
@@ -269,7 +271,8 @@ async def _stealth(max_hours: float, room_url: str | None = None) -> int:
             "Ao final, a ata será gerada e enviada por e-mail. Envie /fim para encerrar."
         )
 
-        session = StealthSession(cfg, room)
+        session = StealthSession(cfg, room, run_dir)
+        await session.auth.publish_code()
         stopper.on_meeting_stop(session.finished.set)  # SIGTERM = /fim
         await capture.start()
         log.info("Gravando em modo stealth — /fim no chat encerra (limite %.1fh)", max_hours)

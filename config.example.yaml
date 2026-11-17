@@ -23,8 +23,18 @@ team:
       aliases: ["Beltrano"]
 
 commands:
-  # Quem pode usar comandos no chat (/comece, /pular, /encerrar, /permitir, /ajuda).
-  # Fuzzy match com o display name no Jitsi. /permitir delega durante a reunião.
+  # Comandos no chat (/comece, /pular, /encerrar, /permitir, /ajuda; /fim no stealth).
+  # require_code: true (padrão) — o nome no Jitsi é livre, então só autentica
+  # quem mandar "/auth <código>" por MENSAGEM PRIVADA ao bot. O código de 6
+  # dígitos muda a cada execução e sai no log (journalctl), em
+  # data/<data>/<hora>/admin_code.txt e por e-mail para admin_emails.
+  # /auth no chat público troca o código; 3 códigos errados bloqueiam o participante.
+  require_code: true
+  # Recebem o código de admin por e-mail (usa smtp_host/email_from de distribution).
+  admin_emails: []
+  # Usado só com require_code: false — nome exato (ignora acentos, maiúsculas e
+  # espaços extras), incluindo os aliases do membro em team.members. Sem fuzzy.
+  # /permitir <nome> delega a permissão a outro participante durante a reunião.
   admins:
     - "Fulana da Silva"
   start_on_command: true   # bot só inicia a rodada após /comece no chat

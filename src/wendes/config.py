@@ -69,6 +69,12 @@ class LlmConfig(BaseModel):
 class CommandsConfig(BaseModel):
     admins: list[str] = []
     start_on_command: bool = True  # espera /comece antes de iniciar a rodada
+    # Admin só se autentica com o código da sessão (/auth em privado). Com
+    # false, vale o nome exato (sem acentos/maiúsculas) de admins e aliases.
+    require_code: bool = True
+    # Quem recebe por e-mail o código de admin de cada execução (usa o SMTP
+    # de distribution.smtp_host; independe de email_enabled).
+    admin_emails: list[str] = []
 
 
 class DistributionConfig(BaseModel):

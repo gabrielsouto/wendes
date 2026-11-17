@@ -23,7 +23,9 @@ ASK_PERSON = "{name}, sua vez. {question}"
 NEXT_QUESTION = "{question}"
 FOLLOWUP_BLOCKER = "Entendi, {name}. {followup}"
 THANKS_NEXT = "Obrigado, {name}."
-TIMEBOX_WARNING = "{name}, só um instante — para mantermos o tempo, você pode concluir em uma frase?"
+TIMEBOX_WARNING = (
+    "{name}, só um instante — para mantermos o tempo, você pode concluir em uma frase?"
+)
 NO_ANSWER = "Acho que o {name} não está podendo falar agora. Sigo adiante."
 CLOSING = "É isso, pessoal! Obrigado a todos. A ata será enviada em instantes. Boa sprint!"
 WAITING = "Ainda estou aguardando mais participantes para começar."

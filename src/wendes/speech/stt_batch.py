@@ -8,8 +8,6 @@ import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from faster_whisper import WhisperModel
-
 from wendes.config import Config
 
 log = logging.getLogger(__name__)
@@ -46,12 +44,32 @@ def stt_hotwords(cfg: Config) -> str | None:
     return ", ".join(terms) or None
 
 
+def resolve_stt_device(cfg: Config) -> str:
+    """stt.device resolvido: em "auto", cuda se o ctranslate2 enxergar uma GPU."""
+    if cfg.stt.device != "auto":
+        return cfg.stt.device
+    try:
+        import ctranslate2
+
+        return "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+    except Exception:  # noqa: BLE001 — sem CUDA utilizável, fica na CPU
+        log.debug("Falha ao consultar GPUs no ctranslate2", exc_info=True)
+        return "cpu"
+
+
+def stt_cpu_threads(cfg: Config) -> int:
+    """stt.cpu_threads; 0 = todos os núcleos (o default do faster-whisper usa só 4)."""
+    return cfg.stt.cpu_threads if cfg.stt.cpu_threads > 0 else (os.cpu_count() or 4)
+
+
 def transcribe_recording(cfg: Config, wav_path: Path) -> list[TranscriptSegment]:
+    from faster_whisper import WhisperModel  # import pesado: só quando transcreve
+
     model = WhisperModel(
         cfg.stt.batch_model,
-        device="cpu",
+        device=resolve_stt_device(cfg),
         compute_type=cfg.stt.compute_type,
-        cpu_threads=os.cpu_count() or 4,  # default do faster-whisper usa só 4
+        cpu_threads=stt_cpu_threads(cfg),
         download_root=str(cfg.resolve(cfg.stt.download_root)),
     )
     segments, info = model.transcribe(

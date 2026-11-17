@@ -23,14 +23,29 @@ team:
       aliases: ["Beltrano"]
 
 commands:
-  # Quem pode usar comandos no chat (/comece, /pular, /encerrar, /permitir, /ajuda).
-  # Fuzzy match com o display name no Jitsi. /permitir delega durante a reunião.
+  # Comandos no chat (/comece, /pular, /encerrar, /permitir, /ajuda; /fim no stealth).
+  # require_code: true (padrão) — o nome no Jitsi é livre, então só autentica
+  # quem mandar "/auth <código>" por MENSAGEM PRIVADA ao bot. O código de 6
+  # dígitos muda a cada execução e sai no log (journalctl), em
+  # data/<data>/<hora>/admin_code.txt e por e-mail para admin_emails.
+  # /auth no chat público troca o código; 3 códigos errados bloqueiam o participante.
+  require_code: true
+  # Recebem o código de admin por e-mail (usa smtp_host/email_from de distribution).
+  admin_emails: []
+  # Usado só com require_code: false — nome exato (ignora acentos, maiúsculas e
+  # espaços extras), incluindo os aliases do membro em team.members. Sem fuzzy.
+  # /permitir <nome> delega a permissão a outro participante durante a reunião.
   admins:
     - "Fulana da Silva"
   start_on_command: true   # bot só inicia a rodada após /comece no chat
 
 meeting:
+  # Tempo total de cada pessoa. É repartido entre as perguntas que faltam:
+  # resposta rápida deixa mais tempo para as seguintes. O aviso de tempo (+20 s)
+  # e o follow-up de impedimento (até 45 s) também contam nesse total.
   timebox_per_person_seconds: 120
+  # Piso por pergunta, mesmo quando o tempo da pessoa já acabou.
+  min_seconds_per_question: 30
   end_of_turn_silence_seconds: 2.0
   quorum: 2                 # nº mínimo de participantes humanos para começar
   wait_quorum_minutes: 10   # espera antes de desistir e avisar
@@ -45,6 +60,11 @@ stt:
   # em jargão/nomes que "large-v3-turbo", porém ~3-4x mais lento no CPU.
   batch_model: "large-v3-turbo"
   compute_type: "int8"
+  # "cpu" (padrão), "cuda" ou "auto" (usa cuda se houver GPU visível ao ctranslate2).
+  # Em cuda, prefira compute_type: "float16" (ou "int8_float16").
+  device: "cpu"
+  # Threads de CPU do Whisper, ao vivo e em lote (0 = todos os núcleos).
+  cpu_threads: 0
   download_root: "models/whisper"
   # Contexto geral da transcrição (initial_prompt — só orienta o início).
   vocabulary: "daily, sprint, deploy, homologação"
@@ -70,6 +90,11 @@ llm:
   base_url: "http://localhost:8000/v1"
   model: "meu-modelo"
   timeout_seconds: 30
+
+browser:
+  # Caminho do Chromium. Vazio: usa /usr/bin/chromium-browser se existir, senão
+  # o Chromium instalado por "playwright install chromium".
+  executable_path: ""
 
 distribution:
   email_enabled: false

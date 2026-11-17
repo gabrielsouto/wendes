@@ -2,17 +2,20 @@
 
 No chat, envia apenas um aviso único de gravação ao entrar (em __main__);
 depois só grava o áudio da sala e acompanha quem participou. A sessão termina
-quando um admin envia /fim no chat (mesma lista `commands.admins` do config,
-com fuzzy match do display name). Nenhuma outra resposta é enviada.
+quando um admin envia /fim no chat — admin autenticado por `AdminAuth`, como
+no modo run (/auth <código> em privado, por padrão). Fora as respostas ao
+/auth, nenhuma outra mensagem é enviada.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 
 from rapidfuzz import fuzz
 
 from wendes.config import Config
+from wendes.facilitator.auth import AdminAuth
 from wendes.jitsi.room import JitsiRoom
 
 log = logging.getLogger(__name__)
@@ -37,9 +40,10 @@ def is_bot_display(cfg: Config, display: str) -> bool:
 
 
 class StealthSession:
-    def __init__(self, cfg: Config, room: JitsiRoom) -> None:
+    def __init__(self, cfg: Config, room: JitsiRoom, run_dir: Path | None = None) -> None:
         self.cfg = cfg
         self.room = room
+        self.auth = AdminAuth(cfg, room, run_dir)
         self.finished = asyncio.Event()
         self.attendees: dict[str, str] = {}  # participant_id -> display name
         room.on_chat_message(self.handle_chat)
@@ -49,17 +53,15 @@ class StealthSession:
         if display_name.strip():
             self.attendees[pid] = display_name
 
-    def _is_admin(self, display: str) -> bool:
-        return bool(display.strip()) and any(
-            fuzz.partial_ratio(a.lower(), display.lower()) >= 85
-            for a in self.cfg.commands.admins
-        )
-
-    async def handle_chat(self, pid: str, text: str) -> None:
+    async def handle_chat(self, pid: str, text: str, private: bool = False) -> None:
+        cmd, _, arg = text.strip().partition(" ")
+        if cmd.lower() == "/auth":
+            await self.auth.handle_auth(pid, arg, private)
+            return
         if text.strip().lower() != "/fim":
             return
         display = await self.room.get_display_name(pid)
-        if not self._is_admin(display):
+        if not self.auth.is_admin(pid, display):
             log.info("/fim de não-admin ignorado (%s)", display or pid)
             return
         log.info("/fim recebido de %s — encerrando gravação", display)

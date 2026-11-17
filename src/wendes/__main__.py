@@ -48,10 +48,26 @@ def cmd_check() -> int:
         from wendes.llm.client import Llm
 
         resp = Llm(cfg).ask("Responda apenas: ok", max_tokens=10)
-        print(f"✔ vLLM ok ({resp[:40]!r})")
+        print(f"✔ LLM ok — {cfg.llm.base_url} · {cfg.llm.model} ({resp[:40]!r})")
     except Exception as exc:  # noqa: BLE001
-        print(f"✘ vLLM: {exc}")
+        print(f"✘ LLM ({cfg.llm.base_url} · {cfg.llm.model}): {exc}")
         ok = False
+
+    try:
+        from wendes.jitsi.browser import JitsiBrowser
+
+        version = asyncio.run(JitsiBrowser(cfg).check())
+        print(f"✔ navegador ok (Chromium {version})")
+    except Exception as exc:  # noqa: BLE001
+        print(f"✘ navegador: {exc}")
+        ok = False
+
+    from wendes.speech.stt_batch import resolve_stt_device, stt_cpu_threads
+
+    print(
+        f"ℹ STT no dispositivo {resolve_stt_device(cfg)} (stt.device={cfg.stt.device},"
+        f" {stt_cpu_threads(cfg)} threads de CPU, compute_type={cfg.stt.compute_type})"
+    )
 
     if cfg.secrets.firebase_refresh_token:
         try:
@@ -84,7 +100,7 @@ async def _join_test(stay_seconds: int) -> int:
         "Bom dia, aqui é o robô da daily. Este é um teste de integração."
     )
 
-    browser = JitsiBrowser()
+    browser = JitsiBrowser(cfg)
     try:
         page = await browser.start()
         try:
@@ -98,7 +114,8 @@ async def _join_test(stay_seconds: int) -> int:
         await room.install_event_bridge()
         from wendes.facilitator.commands import ChatCommands
 
-        ChatCommands(cfg, room)  # permite testar /ajuda, /comece etc. no chat
+        commands = ChatCommands(cfg, room)  # permite testar /auth, /ajuda etc. no chat
+        await commands.auth.publish_code()
         await room.send_chat("Bot de teste na sala — envie /ajuda para testar os comandos.")
         await room.unmute()
         await asyncio.sleep(2)
@@ -116,26 +133,59 @@ async def _join_test(stay_seconds: int) -> int:
         await browser.close()
 
 
+def _open_run(cfg):
+    """Cria a pasta da execução e o run.log; retorna (store, date, started_at, run_dir)."""
+    from datetime import datetime
+
+    from wendes.history.store import HistoryStore
+
+    store = HistoryStore(cfg)
+    now = datetime.now()
+    date = now.strftime("%Y-%m-%d")
+    started_at = now.strftime("%H:%M")
+    run_dir = store.run_dir(date, started_at)
+    file_handler = logging.FileHandler(run_dir / "run.log", encoding="utf-8")
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    logging.getLogger().addHandler(file_handler)
+    return store, date, started_at, run_dir
+
+
+async def _shutdown(capture, browser) -> None:
+    """Para a captura e fecha o navegador, cada um tolerando o próprio erro."""
+    try:
+        await capture.stop()
+    except Exception:  # noqa: BLE001
+        log.exception("Falha ao parar a captura de áudio")
+    try:
+        await browser.close()
+    except Exception:  # noqa: BLE001
+        log.exception("Falha ao fechar o navegador")
+
+
+def _mark_interrupted(record, exc: BaseException) -> None:
+    log.exception("A reunião falhou no meio — a ata cobre só o que foi gravado")
+    record.interrupted = True
+    record.error = (str(exc) or type(exc).__name__)[:200]
+
+
 async def _run() -> int:
     cfg = load_config()
 
     from wendes.audio.capture import AudioCapture
     from wendes.audio.devices import ensure_devices
-    from wendes.distribution.email import send_ata
-    from wendes.distribution.webhook import post_ata
-    from wendes.facilitator.state_machine import Facilitator
-    from wendes.history.store import HistoryStore
+    from wendes.facilitator.commands import ChatCommands
+    from wendes.facilitator.state_machine import Facilitator, MeetingRecord
     from wendes.jitsi.browser import JitsiBrowser
     from wendes.jitsi.entry import EntryError, enter_room
     from wendes.jitsi.room import JitsiRoom
     from wendes.llm.client import Llm
-    from wendes.minutes.summarizer import generate_ata
-    from wendes.speech.stt_batch import save_transcript, transcribe_recording
+    from wendes.pipeline import GracefulStop, finalize_meeting, provisional_save
     from wendes.speech.stt_live import LiveStt
     from wendes.speech.tts import Tts
 
     ensure_devices()
-    store = HistoryStore(cfg)
     tts = Tts(cfg)
     stt = LiveStt(cfg)
     try:
@@ -143,22 +193,14 @@ async def _run() -> int:
     except Exception:  # noqa: BLE001
         llm = None
 
-    from datetime import datetime
-
-    now = datetime.now()
-    date = now.strftime("%Y-%m-%d")
-    started_at = now.strftime("%H:%M")
-    run_dir = store.run_dir(date, started_at)
+    store, date, started_at, run_dir = _open_run(cfg)
     wav_path = run_dir / "recording.wav"
+    record = MeetingRecord(date=date, started_at=started_at, mode="run")
+    stopper = GracefulStop().install()
 
-    file_handler = logging.FileHandler(run_dir / "run.log", encoding="utf-8")
-    file_handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-    )
-    logging.getLogger().addHandler(file_handler)
-
-    browser = JitsiBrowser()
+    browser = JitsiBrowser(cfg)
     capture = AudioCapture(wav_path)
+    joined = False
     try:
         page = await browser.start()
         try:
@@ -170,72 +212,59 @@ async def _run() -> int:
         log.info("Link de convidados: %s", guest_url)
         room = JitsiRoom(page)
         await room.wait_joined(cfg.room.join_timeout_seconds)
+        joined = True
+        provisional_save(store, record)
         await room.install_event_bridge()
         await room.unmute()
         await capture.start()
 
-        from wendes.facilitator.commands import ChatCommands
-
-        commands = ChatCommands(cfg, room)
+        commands = ChatCommands(cfg, room, run_dir)
+        await commands.auth.publish_code()
+        stopper.on_meeting_stop(commands.request_end)  # SIGTERM = /encerrar
         facilitator = Facilitator(cfg, room, capture, tts, stt, llm, commands)
-        facilitator.record.date = date
-        facilitator.record.started_at = started_at  # alinha com a pasta da execução
-        record = facilitator.record  # mantém referência mesmo se a reunião falhar no meio
-        record = await facilitator.run()
+        facilitator.record = record  # mesmo objeto: o parcial sobrevive a falhas
+        await facilitator.run()
         await room.hangup()
+    except asyncio.CancelledError:
+        if not joined:
+            log.warning("Encerrado antes de entrar na sala — sem reunião, sem ata")
+            return 1
+        log.warning("Reunião cancelada — gerando a ata do que foi gravado")
+    except Exception as exc:  # noqa: BLE001
+        if not joined:
+            log.exception("Falha antes de entrar na sala — sem reunião, sem ata")
+            return 1
+        _mark_interrupted(record, exc)
     finally:
-        await capture.stop()
-        await browser.close()
+        await _shutdown(capture, browser)
 
-    log.info("Reunião encerrada — gerando ata (retranscrição com modelo %s)", cfg.stt.batch_model)
-    transcript = transcribe_recording(cfg, wav_path) if wav_path.exists() else None
-    if transcript:
-        save_transcript(run_dir, transcript, cfg.stt.corrections)
-    ata = generate_ata(cfg, llm, record, transcript)
-    ata_path = store.save(record, ata)
-    log.info("Ata salva em %s", ata_path)
-    send_ata(cfg, ata, record.date)
-    post_ata(cfg, ata)
-    return 0
+    finalize_meeting(cfg, store, run_dir, record, wav_path, mode="run")
+    return 1 if record.interrupted else 0
 
 
 async def _stealth(max_hours: float, room_url: str | None = None) -> int:
     """Modo stealth: entra mudo, grava e transcreve tudo; /fim encerra e envia a ata."""
     cfg = load_config()
 
-    from datetime import datetime
-
     from wendes.audio.capture import AudioCapture
     from wendes.audio.devices import ensure_devices
-    from wendes.distribution.email import send_ata
-    from wendes.distribution.webhook import post_ata
     from wendes.facilitator.state_machine import MeetingRecord, PersonRecord
     from wendes.facilitator.stealth import StealthSession, canonical_name, is_bot_display
-    from wendes.history.store import HistoryStore
     from wendes.jitsi.browser import JitsiBrowser
     from wendes.jitsi.entry import EntryError, enter_room
     from wendes.jitsi.room import JitsiRoom
-    from wendes.llm.client import Llm
-    from wendes.minutes.summarizer import generate_stealth_ata
-    from wendes.speech.stt_batch import save_transcript, transcribe_recording
+    from wendes.pipeline import GracefulStop, finalize_meeting, provisional_save
 
     ensure_devices()
-    store = HistoryStore(cfg)
-
-    now = datetime.now()
-    date = now.strftime("%Y-%m-%d")
-    started_at = now.strftime("%H:%M")
-    run_dir = store.run_dir(date, started_at)
+    store, date, started_at, run_dir = _open_run(cfg)
     wav_path = run_dir / "recording.wav"
+    record = MeetingRecord(date=date, started_at=started_at, mode="stealth")
+    stopper = GracefulStop().install()
 
-    file_handler = logging.FileHandler(run_dir / "run.log", encoding="utf-8")
-    file_handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-    )
-    logging.getLogger().addHandler(file_handler)
-
-    browser = JitsiBrowser()
-    capture = AudioCapture(wav_path)
+    browser = JitsiBrowser(cfg)
+    capture = AudioCapture(wav_path)  # sem inscritos: só grava o WAV
+    session: StealthSession | None = None
+    joined = False
     try:
         page = await browser.start()
         try:
@@ -249,6 +278,8 @@ async def _stealth(max_hours: float, room_url: str | None = None) -> int:
         log.info("Link de convidados: %s", guest_url)
         room = JitsiRoom(page)
         await room.wait_joined(cfg.room.join_timeout_seconds)
+        joined = True
+        provisional_save(store, record)
         await room.install_event_bridge()
         await room.mute()  # sem voz; única mensagem de chat é o aviso de gravação
         await room.send_chat(
@@ -256,19 +287,29 @@ async def _stealth(max_hours: float, room_url: str | None = None) -> int:
             "Ao final, a ata será gerada e enviada por e-mail. Envie /fim para encerrar."
         )
 
-        session = StealthSession(cfg, room)
+        session = StealthSession(cfg, room, run_dir)
+        await session.auth.publish_code()
+        stopper.on_meeting_stop(session.finished.set)  # SIGTERM = /fim
         await capture.start()
         log.info("Gravando em modo stealth — /fim no chat encerra (limite %.1fh)", max_hours)
         await session.wait_finished(max_hours=max_hours)
         await room.hangup()
+    except asyncio.CancelledError:
+        if not joined:
+            log.warning("Encerrado antes de entrar na sala — sem reunião, sem ata")
+            return 1
+        log.warning("Gravação cancelada — gerando a ata do que foi gravado")
+    except Exception as exc:  # noqa: BLE001
+        if not joined:
+            log.exception("Falha antes de entrar na sala — sem reunião, sem ata")
+            return 1
+        _mark_interrupted(record, exc)
     finally:
-        await capture.stop()
-        await browser.close()
+        await _shutdown(capture, browser)
 
     # attendees → nomes canônicos do roster quando casarem (sem contar o bot)
-    record = MeetingRecord(date=date, started_at=started_at)
     seen: set[str] = set()
-    for display in session.attendees.values():
+    for display in (session.attendees.values() if session is not None else ()):
         if is_bot_display(cfg, display):
             continue
         name = canonical_name(cfg, display)
@@ -276,20 +317,8 @@ async def _stealth(max_hours: float, room_url: str | None = None) -> int:
             seen.add(name)
             record.people.append(PersonRecord(name=name, present=True))
 
-    log.info("Gravação encerrada — transcrevendo com o modelo %s", cfg.stt.batch_model)
-    transcript = transcribe_recording(cfg, wav_path) if wav_path.exists() else None
-    if transcript:
-        save_transcript(run_dir, transcript, cfg.stt.corrections)
-    try:
-        llm = Llm(cfg)
-    except Exception:  # noqa: BLE001
-        llm = None
-    ata = generate_stealth_ata(cfg, llm, record, transcript, room_url=room_url)
-    ata_path = store.save(record, ata)
-    log.info("Ata salva em %s", ata_path)
-    send_ata(cfg, ata, date)
-    post_ata(cfg, ata)
-    return 0
+    finalize_meeting(cfg, store, run_dir, record, wav_path, mode="stealth", room_url=room_url)
+    return 1 if record.interrupted else 0
 
 
 def cmd_resummarize(
@@ -330,8 +359,11 @@ def cmd_resummarize(
         llm = Llm(cfg)
     except Exception:  # noqa: BLE001
         llm = None
-    # Reunião stealth não tem respostas estruturadas — usa a ata de transcrição.
-    stealth = not any(p.answers for p in record.people)
+    if record.mode:
+        stealth = record.mode == "stealth"
+    else:
+        # Registro antigo (sem mode): stealth não tem respostas estruturadas.
+        stealth = not any(p.answers for p in record.people)
     generate = generate_stealth_ata if stealth else generate_ata
     ata = generate(cfg, llm, record, transcript)
     path = store.save(record, ata)
@@ -362,7 +394,10 @@ def main() -> None:
     )
     p_re = sub.add_parser("resummarize", help="regera a ata de uma data")
     p_re.add_argument("date", help="data no formato YYYY-MM-DD")
-    p_re.add_argument("--hora", default=None, help="HH:MM de uma reunião específica (default: a última do dia)")
+    p_re.add_argument(
+        "--hora", default=None,
+        help="HH:MM de uma reunião específica (default: a última do dia)",
+    )
     p_re.add_argument(
         "--retranscribe", action="store_true",
         help="retranscreve o áudio mesmo se houver transcript.json salvo",

@@ -1,7 +1,7 @@
 """STT ao vivo: VAD (Silero via faster-whisper/onnx) + whisper small int8.
 
-Consome chunks PCM da captura, detecta fim de fala por silêncio e devolve
-utterances transcritas.
+Consome chunks PCM de uma fila inscrita na captura (AudioCapture.subscribe),
+detecta fim de fala por silêncio e devolve utterances transcritas.
 """
 from __future__ import annotations
 
@@ -10,11 +10,9 @@ import logging
 from dataclasses import dataclass
 
 import numpy as np
-from faster_whisper import WhisperModel
-from faster_whisper.vad import VadOptions, get_speech_timestamps
 
-from wendes.audio.capture import SAMPLE_RATE, AudioCapture
 from wendes.config import Config
+from wendes.speech.stt_batch import resolve_stt_device, stt_cpu_threads
 
 log = logging.getLogger(__name__)
 
@@ -27,10 +25,13 @@ class Utterance:
 
 class LiveStt:
     def __init__(self, cfg: Config) -> None:
+        from faster_whisper import WhisperModel  # import pesado: só ao criar o STT
+
         self.model = WhisperModel(
             cfg.stt.live_model,
-            device="cpu",
+            device=resolve_stt_device(cfg),
             compute_type=cfg.stt.compute_type,
+            cpu_threads=stt_cpu_threads(cfg),
             download_root=str(cfg.resolve(cfg.stt.download_root)),
         )
         self.vocabulary = cfg.stt.vocabulary
@@ -45,12 +46,14 @@ class LiveStt:
 
     @staticmethod
     def _has_speech(pcm: bytes) -> bool:
+        from faster_whisper.vad import VadOptions, get_speech_timestamps
+
         audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
         return bool(get_speech_timestamps(audio, VadOptions(min_speech_duration_ms=200)))
 
     async def listen_utterance(
         self,
-        capture: AudioCapture,
+        chunks: asyncio.Queue[bytes],
         max_seconds: float,
         min_speech_chunks: int = 1,
         on_speech_end=None,
@@ -69,12 +72,12 @@ class LiveStt:
         chunk_s = 0.5
 
         # descarta áudio acumulado enquanto o bot falava
-        while not capture.chunks.empty():
-            capture.chunks.get_nowait()
+        while not chunks.empty():
+            chunks.get_nowait()
 
         while elapsed < max_seconds:
             try:
-                chunk = await asyncio.wait_for(capture.chunks.get(), timeout=5)
+                chunk = await asyncio.wait_for(chunks.get(), timeout=5)
             except asyncio.TimeoutError:
                 elapsed += 5
                 continue

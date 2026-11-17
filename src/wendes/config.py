@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel
@@ -30,6 +31,8 @@ class TeamConfig(BaseModel):
 
 class MeetingConfig(BaseModel):
     timebox_per_person_seconds: int = 120
+    # Piso de escuta por pergunta, mesmo com o timebox da pessoa esgotado
+    min_seconds_per_question: int = 30
     end_of_turn_silence_seconds: float = 2.0
     quorum: int = 2
     wait_quorum_minutes: int = 10
@@ -44,6 +47,10 @@ class SttConfig(BaseModel):
     live_model: str = "small"
     batch_model: str = "medium"
     compute_type: str = "int8"
+    # "cpu", "cuda" ou "auto" (cuda se o ctranslate2 enxergar alguma GPU)
+    device: Literal["cpu", "cuda", "auto"] = "cpu"
+    # Threads de CPU do Whisper (ao vivo e em lote); 0 = todos os núcleos
+    cpu_threads: int = 0
     download_root: str = "models/whisper"
     vocabulary: str = ""
     # Termos que o modelo realmente erra, injetados em cada janela de áudio.
@@ -66,9 +73,20 @@ class LlmConfig(BaseModel):
     timeout_seconds: int = 30
 
 
+class BrowserConfig(BaseModel):
+    # Vazio: /usr/bin/chromium-browser se existir, senão o Chromium do Playwright
+    executable_path: str = ""
+
+
 class CommandsConfig(BaseModel):
     admins: list[str] = []
     start_on_command: bool = True  # espera /comece antes de iniciar a rodada
+    # Admin só se autentica com o código da sessão (/auth em privado). Com
+    # false, vale o nome exato (sem acentos/maiúsculas) de admins e aliases.
+    require_code: bool = True
+    # Quem recebe por e-mail o código de admin de cada execução (usa o SMTP
+    # de distribution.smtp_host; independe de email_enabled).
+    admin_emails: list[str] = []
 
 
 class DistributionConfig(BaseModel):
@@ -84,6 +102,8 @@ class Secrets(BaseSettings):
     model_config = SettingsConfigDict(env_file=PROJECT_ROOT / ".env", extra="ignore")
     firebase_refresh_token: str = ""
     smtp_password: str = ""
+    # Chave do endpoint LLM (OpenAI e afins); vazio para vLLM/Ollama locais.
+    llm_api_key: str = ""
 
 
 class Config(BaseModel):
@@ -94,6 +114,7 @@ class Config(BaseModel):
     tts: TtsConfig = TtsConfig()
     llm: LlmConfig
     commands: CommandsConfig = CommandsConfig()
+    browser: BrowserConfig = BrowserConfig()
     distribution: DistributionConfig = DistributionConfig()
     data_dir: str = "data"
 

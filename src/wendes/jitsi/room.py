@@ -15,6 +15,10 @@ JOINED_JS = (
 )
 
 
+def _kind(is_private: bool) -> str:
+    return "privada" if is_private else "pública"
+
+
 @dataclass
 class Participant:
     id: str
@@ -27,6 +31,7 @@ class JitsiRoom:
         self.dominant_speaker_id: str | None = None
         self._speaker_listeners: list = []
         self._chat_listeners: list = []
+        self.can_send_private: bool | None = None  # descoberto na ponte de eventos
 
     async def wait_joined(self, timeout_s: int = 90) -> None:
         """Espera a conferência estar estabelecida (APP.conference.membersCount)."""
@@ -50,10 +55,14 @@ class JitsiRoom:
                 except TypeError:
                     cb(pid)
 
-        async def _on_chat_message(pid: str, text: str) -> None:
-            log.info("Chat recebido de %s: %s", pid, text[:120])
+        async def _on_chat_message(pid: str, text: str, is_private: bool = False) -> None:
+            if text.strip().lower().startswith("/auth"):
+                # não registra o código no log
+                log.info("Chat recebido de %s (%s): /auth ***", pid, _kind(is_private))
+            else:
+                log.info("Chat recebido de %s (%s): %s", pid, _kind(is_private), text[:120])
             for cb in self._chat_listeners:
-                res = cb(pid, text)
+                res = cb(pid, text, bool(is_private))
                 if asyncio.iscoroutine(res):
                     await res
 
@@ -64,11 +73,13 @@ class JitsiRoom:
                 const out = { jitsiMeetJS: !!window.JitsiMeetJS, listeners: [], errors: [] };
                 try {
                     const room = APP.conference._room;
+                    out.sendPrivateTextMessage = typeof room.sendPrivateTextMessage === 'function';
                     const events = (window.JitsiMeetJS && JitsiMeetJS.events.conference) || {};
                     const myId = String(APP.conference.getMyUserId());
                     const forward = (label) => (id, text) => {
                         if (String(id) !== myId && typeof text === 'string') {
-                            window.botOnChatMessage(String(id), String(text));
+                            window.botOnChatMessage(
+                                String(id), String(text), label === 'private');
                         }
                     };
                     const speakerName = (id) => {
@@ -88,9 +99,11 @@ class JitsiRoom:
                             : forward(label));
                         out.listeners.push(name);
                     };
-                    listen(events.DOMINANT_SPEAKER_CHANGED, 'conference.dominantSpeaker', 'speaker');
+                    listen(events.DOMINANT_SPEAKER_CHANGED,
+                           'conference.dominantSpeaker', 'speaker');
                     listen(events.MESSAGE_RECEIVED, 'conference.messageReceived', 'chat');
-                    listen(events.PRIVATE_MESSAGE_RECEIVED, 'conference.privateMessageReceived', 'private');
+                    listen(events.PRIVATE_MESSAGE_RECEIVED,
+                           'conference.privateMessageReceived', 'private');
                 } catch (e) {
                     out.errors.push(String(e));
                 }
@@ -98,12 +111,18 @@ class JitsiRoom:
             }"""
         )
         log.info("Ponte de eventos instalada: %s", diag)
+        self.can_send_private = bool(diag.get("sendPrivateTextMessage"))
+        if not self.can_send_private:
+            log.warning(
+                "sendPrivateTextMessage indisponível nesta versão do lib-jitsi-meet —"
+                " respostas privadas irão ao chat público (sem conteúdo sensível)"
+            )
 
     def on_dominant_speaker(self, callback) -> None:
         self._speaker_listeners.append(callback)
 
     def on_chat_message(self, callback) -> None:
-        """callback(participant_id: str, text: str) — pode ser corrotina."""
+        """callback(participant_id: str, text: str, private: bool) — pode ser corrotina."""
         self._chat_listeners.append(callback)
 
     async def get_display_name(self, participant_id: str) -> str:
@@ -135,6 +154,26 @@ class JitsiRoom:
         await self.page.evaluate(
             "(msg) => APP.conference._room.sendTextMessage(msg)", message
         )
+
+    async def send_private(self, participant_id: str, message: str) -> None:
+        """Mensagem privada; sem suporte na página, cai no chat público.
+
+        Nunca passe conteúdo sensível (ex.: o código de admin) por aqui.
+        """
+        sent = False
+        if self.can_send_private is not False:
+            sent = await self.page.evaluate(
+                """([id, msg]) => {
+                    const room = APP.conference._room;
+                    if (typeof room.sendPrivateTextMessage !== 'function') return false;
+                    room.sendPrivateTextMessage(id, msg);
+                    return true;
+                }""",
+                [participant_id, message],
+            )
+        if not sent:
+            log.warning("Mensagem privada indisponível — respondendo no chat público")
+            await self.send_chat(message)
 
     async def hangup(self) -> None:
         try:

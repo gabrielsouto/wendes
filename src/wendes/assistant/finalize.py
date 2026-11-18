@@ -234,7 +234,12 @@ def finalize_assist(
     duration = wav_seconds(wav_path) or (state.segments[-1].end if state.segments else 0.0)
     batch_transcript(cfg, run_dir, wav_path)
     ata = build_ata(cfg, llm, record, state, room_url=room_url, duration_s=duration)
-    path = _save_and_distribute(cfg, store, run_dir, record, ata, distribute)
+    attachments = None
+    if cfg.distribution.attach_artifacts:
+        from wendes.assistant.artifacts import ArtifactStore
+
+        attachments = ArtifactStore(run_dir).latest_files() or None
+    path = _save_and_distribute(cfg, store, run_dir, record, ata, distribute, attachments)
     if store is not None:
         try:
             save_actions(cfg, store, run_dir, record, state, room_url or cfg.room.url, distribute)
@@ -260,7 +265,7 @@ def _save_and_distribute(cfg, store, run_dir: Path, record, ata: str, distribute
     if not distribute:
         return ata_path
     try:
-        send_ata(cfg, ata, record.date)
+        send_ata(cfg, ata, record.date, attachments=attachments)
     except Exception:  # noqa: BLE001
         log.exception("Falha ao enviar a ata por e-mail")
     try:

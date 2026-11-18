@@ -150,6 +150,14 @@ class AssistantSession:
             self.segment_hooks.append(self._voice_hook)
         self._requests: set[asyncio.Task] = set()
 
+        # ---- artefatos (F4) -----------------------------------------------------
+        from wendes.assistant.artifacts import ArtifactStore
+
+        self.artifacts = ArtifactStore(run_dir if state.persist else None)
+        if self.artifacts.items:
+            state.artifacts = self.artifacts.public()
+        self._repaired: set[tuple[int, int]] = set()
+
         # ---- pendências de reuniões anteriores (F5) -------------------------
         self.prev_pending: list = []
         if self.notes is not None:
@@ -166,6 +174,8 @@ class AssistantSession:
                 port=w.port,
                 public_base_url=w.public_base_url,
                 allow_edit=w.allow_edit,
+                on_edit=self.edit_artifact,
+                on_render_error=self.render_error,
             )
 
     # ---- ciclo de vida ---------------------------------------------------
@@ -827,6 +837,171 @@ class AssistantSession:
         if out is None:
             return "sem_resposta"
         return "mencionada" if out.status == "aberta" else out.status
+
+    # ---- artefatos (F4) -------------------------------------------------------
+    async def cmd_artifact(self, pid, display, cmd: Command, private) -> None:
+        if not self.policy.can_artifacts(pid, display):
+            await self.deny(pid, display, private, "criar artefatos")
+            return
+        if not cmd.arg.strip():
+            await self.reply(pid, private, P.ARTIFACT_USAGE)
+            return
+        await self.make_artifact(cmd.kind, cmd.arg, ref=cmd.ref, pid=pid, display=display,
+                                 private=private, voice=False)
+
+    async def request_artifact(self, intent: str, text: str, *, pid: str, display: str,
+                               private: bool, voice: bool) -> None:
+        """Pedido por texto livre ou voz, já roteado para um tipo de artefato."""
+        from wendes.assistant.artifacts import INTENT_TO_TYPE
+
+        if voice:
+            allowed = self.a.permissions.artifacts in ("all", "members")
+        else:
+            allowed = self.policy.can_artifacts(pid, display)
+        if not allowed:
+            await self.deny(pid, display, private, "criar artefatos")
+            return
+        await self.make_artifact(INTENT_TO_TYPE.get(intent, "doc"), text, ref=None, pid=pid,
+                                 display=display, private=private, voice=voice)
+
+    def _artifact_context(self) -> tuple[str, str]:
+        from wendes.assistant.budget import Part, fit
+        from wendes.assistant.notes import Notes, compact_view
+
+        notes = self.notes.notes if self.notes is not None else Notes()
+        budget = max(800, self.cfg.llm.context_tokens - 1600 - 600)
+        parts = fit([
+            Part("n", compact_view(notes, last_points=5), int(budget * 0.35), cut_order=1),
+            Part("t", [s.line("não identificado") for s in self.state.segments if not s.marker],
+                 int(budget * 0.5), keep="newest", cut_order=0),
+        ], budget)
+        return "\n".join(parts["n"]) or "(sem notas)", "\n".join(parts["t"]) or "(vazia)"
+
+    def _generate_artifact(self, tipo: str, prompt: str):
+        """Roda na thread do LLM: gera e valida (uma nova tentativa com o erro)."""
+        from wendes.assistant.artifacts import ArtifactOut, validate
+
+        llm_cfg = self.cfg.llm
+        current = prompt
+        for _ in range(2):
+            out = ask_json(self.llm, current, ArtifactOut, system=self.system,
+                           mode=llm_cfg.structured_output, vllm_key=llm_cfg.vllm_guided_key,
+                           max_tokens=1600)
+            if out is None:
+                return None
+            try:
+                return out.titulo, validate(tipo, out.conteudo)
+            except ValueError as exc:
+                current = f"{prompt}\n\nA resposta anterior foi inválida: {exc}. Corrija."
+        return None
+
+    async def make_artifact(self, tipo: str, request: str, *, ref: int | None, pid: str,
+                            display: str, private: bool, voice: bool) -> None:
+        from wendes.assistant.artifacts import UPDATE_VERBS
+        from wendes.assistant.search import _fold
+
+        if self.llm is None:
+            await self.reply(pid, private, P.LLM_DOWN)
+            return
+        target = None
+        if ref is not None:
+            target = self.artifacts.get(ref)
+            if target is None:
+                await self.reply(pid, private, P.ARTIFACT_NOT_FOUND.format(id=ref))
+                return
+        elif UPDATE_VERBS.search(_fold(request)):
+            target = self.artifacts.find_by_title(request)
+        notas, trechos = self._artifact_context()
+        if target is not None:
+            tipo = target.tipo
+            prompt = P.ARTIFACT_UPDATE.format(
+                guia=P.ARTIFACT_GUIDE[tipo], tipo=tipo, titulo=target.titulo,
+                atual=target.latest.conteudo, pedido=request, trechos=trechos,
+            )
+        else:
+            prompt = P.ARTIFACT_CREATE.format(
+                guia=P.ARTIFACT_GUIDE[tipo], tipo=tipo, pedido=request, notas=notas,
+                trechos=trechos,
+            )
+        fut = self.scheduler.submit(HUMAN, "artefato",
+                                    lambda: self._generate_artifact(tipo, prompt),
+                                    est_tokens=est(prompt, 1600), timeout=240.0)
+        try:
+            result = await self.with_thinking(fut, voice=voice, pid=pid, private=private)
+        except Exception:  # noqa: BLE001
+            log.warning("Falha ao gerar artefato", exc_info=True)
+            result = None
+        if result is None:
+            await self.reply(pid, private, P.ARTIFACT_FAILED)
+            return
+        titulo, conteudo = result
+        autor = self.bot_name
+        pedido = f"{display or 'voz'}: {request}"
+        if target is None:
+            art = self.artifacts.create(tipo, titulo, conteudo, autor=autor, pedido=pedido)
+            msg = P.ARTIFACT_CREATED.format(titulo=art.titulo, id=art.id)
+            acao = "criei"
+        else:
+            v = self.artifacts.add_version(target.id, conteudo, autor=autor, pedido=pedido)
+            art = target
+            msg = P.ARTIFACT_UPDATED.format(titulo=art.titulo, id=art.id, n=v.n)
+            acao = "atualizei"
+        self.state.set_artifacts(self.artifacts.public())
+        log.info("Artefato #%d (%s) versão %d", art.id, art.tipo, len(art.versoes))
+        await self.send_chat(msg)
+        if (pid and self.web is not None and self.policy.is_admin(pid, display)
+                and getattr(self.room, "can_send_private", None) is not False):
+            await self.room.send_private(pid, P.ARTIFACT_LINK.format(
+                titulo=art.titulo, url=self.web.page_url()))
+        if voice and self.a.voice_answers:
+            await self.say(P.ARTIFACT_SPOKEN.format(acao=acao, titulo=art.titulo))
+
+    async def edit_artifact(self, aid: int, content: str, author: str) -> dict:
+        """Edição pela página (assistant.web.allow_edit): nova versão com o autor."""
+        from wendes.assistant.artifacts import validate
+
+        art = self.artifacts.get(aid)
+        if art is None:
+            raise KeyError(aid)
+        text = validate(art.tipo, content)
+        v = self.artifacts.add_version(aid, text, autor=f"{author} (página)",
+                                       pedido="edição na página")
+        self.state.set_artifacts(self.artifacts.public())
+        log.info("Artefato #%d editado na página (versão %d)", aid, v.n)
+        return {"ok": True, "versao": v.n}
+
+    async def render_error(self, aid: int, version: int, error: str) -> None:
+        """Mermaid não renderizou: pede UMA correção ao LLM (prioridade baixa)."""
+        from wendes.assistant.llm_queue import BACKGROUND
+
+        art = self.artifacts.get(aid)
+        if art is None or self.llm is None or art.formato != "mmd":
+            return
+        ver = next((v for v in art.versoes if v.n == version), None)
+        if ver is None or ver.reparo or (aid, version) in self._repaired:
+            return  # já é uma correção (ou já pedida): a página mostra o código
+        if version != art.latest.n:
+            return
+        self._repaired.add((aid, version))
+        log.info("Mermaid do artefato #%d v%d não renderizou — pedindo correção", aid, version)
+        prompt = P.ARTIFACT_REPAIR.format(erro=error[:300], tipo=art.tipo, titulo=art.titulo,
+                                          codigo=ver.conteudo)
+
+        async def run() -> None:
+            fut = self.scheduler.submit(BACKGROUND, "reparo_mermaid",
+                                        lambda: self._generate_artifact(art.tipo, prompt),
+                                        est_tokens=est(prompt, 1600))
+            try:
+                result = await fut
+            except Exception:  # noqa: BLE001
+                return
+            if result is None or art.latest.n != version:
+                return
+            self.artifacts.add_version(aid, result[1], autor=f"{self.bot_name} (correção)",
+                                       pedido=f"correção automática: {error[:120]}", reparo=True)
+            self.state.set_artifacts(self.artifacts.public())
+
+        self.spawn_request(run())
 
     async def cmd_fim(self, pid, display, cmd, private) -> None:
         if not self.policy.is_admin(pid, display):

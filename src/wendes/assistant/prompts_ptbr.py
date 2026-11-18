@@ -237,3 +237,73 @@ Pendência: {descricao}
 <transcricao>
 {trechos}
 </transcricao>"""
+
+
+# ---- artefatos (F4) -----------------------------------------------------------------
+ARTIFACT_GUIDE = {
+    "doc": "um documento em markdown (títulos, listas, parágrafos curtos)",
+    "checklist": "uma checklist em markdown, com itens '- [ ] tarefa' agrupados por título",
+    "tabela": "uma tabela em markdown (linha de cabeçalho e separador |---|)",
+    "diagrama": (
+        "um diagrama Mermaid válido (flowchart TD/LR, sequenceDiagram, mindmap ou"
+        " stateDiagram-v2). Use ids simples sem acento nos nós e o texto entre"
+        " colchetes/aspas, ex.: A[\"Pedido\"] --> B{\"Aprovado?\"}"
+    ),
+    "cronograma": (
+        "um cronograma em Mermaid gantt válido: 'gantt', 'dateFormat YYYY-MM-DD',"
+        " 'title …', seções com 'section' e tarefas 'Nome :id1, 2026-12-01, 5d'"
+    ),
+}
+ARTIFACT_CREATE = """Crie {guia} a partir do pedido e do contexto da reunião. Use só o que
+foi dito; onde faltar informação, deixe marcado como "a definir". Seja conciso (o
+conteúdo precisa caber em cerca de 1500 tokens). Sem cercas ``` no conteúdo.
+
+Responda com {{"tipo": "{tipo}", "titulo": "<título curto>", "conteudo": "<conteúdo>"}}.
+Exemplo: {{"tipo": "checklist", "titulo": "Preparação do evento", "conteudo": "## Antes\\n- [ ]
+Reservar o auditório"}}
+
+<pedido>
+{pedido}
+</pedido>
+
+<notas>
+{notas}
+</notas>
+
+<transcricao>
+{trechos}
+</transcricao>"""
+ARTIFACT_UPDATE = """Atualize o artefato abaixo ({guia}) conforme o pedido. Parta SEMPRE da
+versão atual (que pode ter sido editada à mão por alguém): preserve o que não foi pedido
+para mudar. Devolva o conteúdo inteiro novo, sem cercas ```.
+
+Responda com {{"tipo": "{tipo}", "titulo": "<título>", "conteudo": "<conteúdo completo>"}}.
+
+Título atual: {titulo}
+<notas>
+Versão atual:
+{atual}
+</notas>
+
+<pedido>
+{pedido}
+</pedido>
+
+<transcricao>
+{trechos}
+</transcricao>"""
+ARTIFACT_REPAIR = """O diagrama Mermaid abaixo não renderizou no navegador. Corrija SÓ a
+sintaxe, mantendo o conteúdo. Erro informado: {erro}
+
+Responda com {{"tipo": "{tipo}", "titulo": "{titulo}", "conteudo": "<mermaid corrigido>"}}.
+
+<notas>
+{codigo}
+</notas>"""
+ARTIFACT_CREATED = "📝 Criei «{titulo}» (#{id}) — está na página."
+ARTIFACT_UPDATED = "📝 Atualizei «{titulo}» (#{id}, versão {n}) — está na página."
+ARTIFACT_SPOKEN = "Pronto, {acao} {titulo}. Está na página da reunião."
+ARTIFACT_FAILED = "Não consegui gerar o artefato agora. Tente de novo com um pedido mais direto."
+ARTIFACT_NOT_FOUND = "Não encontrei o artefato #{id}."
+ARTIFACT_USAGE = "Uso: /doc <pedido> (ou /diagrama, /cronograma, /checklist, /tabela; #id atualiza)"
+ARTIFACT_LINK = "🔗 «{titulo}» na página: {url}"

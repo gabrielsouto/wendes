@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from wendes.config import Config
@@ -18,6 +18,11 @@ class TranscriptSegment:
     start: float
     end: float
     text: str
+    # Modo assist: falante atribuído pela linha do tempo de níveis ("" = não identificado)
+    speaker: str = ""
+    speaker_conf: float = 0.0
+    # Palavras com tempo (word_timestamps); não vão para o transcript.json
+    words: list = field(default_factory=list, repr=False, compare=False)
 
 
 def normalize_transcript_text(text: str, corrections: dict[str, str] | None = None) -> str:
@@ -62,7 +67,9 @@ def stt_cpu_threads(cfg: Config) -> int:
     return cfg.stt.cpu_threads if cfg.stt.cpu_threads > 0 else (os.cpu_count() or 4)
 
 
-def transcribe_recording(cfg: Config, wav_path: Path) -> list[TranscriptSegment]:
+def transcribe_recording(
+    cfg: Config, wav_path: Path, word_timestamps: bool = False
+) -> list[TranscriptSegment]:
     from faster_whisper import WhisperModel  # import pesado: só quando transcreve
 
     model = WhisperModel(
@@ -84,13 +91,18 @@ def transcribe_recording(cfg: Config, wav_path: Path) -> list[TranscriptSegment]
         # Sem contexto do segmento anterior: um erro de reconhecimento não
         # contamina os seguintes nem induz loops de repetição.
         condition_on_previous_text=False,
+        word_timestamps=word_timestamps,
     )
-    out = [
-        TranscriptSegment(
+    out = []
+    for s in segments:
+        seg = TranscriptSegment(
             s.start, s.end, normalize_transcript_text(s.text.strip(), cfg.stt.corrections)
         )
-        for s in segments
-    ]
+        if word_timestamps:
+            from wendes.assistant.speakers import Word
+
+            seg.words = [Word(w.start, w.end, w.word) for w in (s.words or [])]
+        out.append(seg)
     log.info("Retranscrição: %d segmentos (%.1f min de áudio)", len(out), info.duration / 60)
     return out
 
@@ -103,11 +115,20 @@ def save_transcript(
     """Grava transcript.json (para reprocessar sem retranscrever) e o .txt legível."""
     for seg in segments:
         seg.text = normalize_transcript_text(seg.text, corrections)
+    rows = []
+    for s in segments:
+        row = asdict(s)
+        row.pop("words", None)
+        if not s.speaker:  # transcript.json dos modos run/stealth fica como antes
+            row.pop("speaker", None)
+            row.pop("speaker_conf", None)
+        rows.append(row)
     (run_dir / "transcript.json").write_text(
-        json.dumps([asdict(s) for s in segments], ensure_ascii=False, indent=1),
-        encoding="utf-8",
+        json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8"
     )
-    lines = [f"[{s.start:7.1f}s] {s.text}" for s in segments]
+    lines = [
+        f"[{s.start:7.1f}s] {s.speaker + ': ' if s.speaker else ''}{s.text}" for s in segments
+    ]
     (run_dir / "transcript.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -118,7 +139,8 @@ def load_transcript(
     if not path.exists():
         return None
     data = json.loads(path.read_text(encoding="utf-8"))
-    out = [TranscriptSegment(**s) for s in data]
+    fields = ("start", "end", "text", "speaker", "speaker_conf")
+    out = [TranscriptSegment(**{k: v for k, v in s.items() if k in fields}) for s in data]
     for seg in out:
         seg.text = normalize_transcript_text(seg.text, corrections)
     return out

@@ -93,7 +93,14 @@ def send_admin_code(cfg: Config, code: str) -> None:
     log.info("Código de admin enviado para %s", cfg.commands.admin_emails)
 
 
-def send_ata(cfg: Config, ata_markdown: str, date: str) -> None:
+def _attachment_name(path) -> str:
+    """artifacts/2-plano-do-evento/v3.md → 2-plano-do-evento-v3.md"""
+    return f"{path.parent.name}-{path.name}"
+
+
+def send_ata(
+    cfg: Config, ata_markdown: str, date: str, attachments: list | None = None
+) -> None:
     d = cfg.distribution
     if not d.email_enabled or not d.email_to:
         log.info("E-mail desabilitado — pulando envio")
@@ -106,5 +113,9 @@ def send_ata(cfg: Config, ata_markdown: str, date: str) -> None:
     # multipart/alternative: o cliente escolhe entre o markdown e o HTML
     msg.set_content(ata_markdown)
     msg.add_alternative(ata_html(ata_markdown, subject), subtype="html")
+    for path in attachments or []:  # modo assist: artefatos .md/.mmd
+        msg.add_attachment(
+            path.read_bytes(), maintype="text", subtype="markdown", filename=_attachment_name(path)
+        )
     _smtp_send(cfg, msg)
     log.info("Ata enviada para %s", d.email_to)

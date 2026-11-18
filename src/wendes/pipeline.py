@@ -1,4 +1,4 @@
-"""Pós-reunião comum aos modos run e stealth, e encerramento ordenado por sinal.
+"""Pós-reunião comum aos modos run, stealth e assist, e encerramento ordenado por sinal.
 
 `finalize_meeting` roda sempre que houve reunião — inclusive quando ela falhou
 no meio ou o serviço recebeu SIGTERM —, para que a ata nunca se perca.
@@ -59,6 +59,12 @@ def finalize_meeting(
     room_url: str | None = None,
 ) -> Path:
     """Retranscreve, gera a ata, salva no histórico e distribui. Retorna o ata.md."""
+    if mode == "assist":
+        from wendes.assistant.finalize import finalize_assist
+
+        return finalize_assist(
+            cfg, store, run_dir, record, wav_path, room_url=room_url, llm=_make_llm(cfg)
+        )
     from wendes.distribution.email import send_ata
     from wendes.distribution.webhook import post_ata
     from wendes.minutes.summarizer import generate_ata, generate_stealth_ata
@@ -88,6 +94,9 @@ def finalize_meeting(
         ata = generate_ata(cfg, llm, record, transcript)
     ata_path = store.save(record, ata)
     log.info("Ata salva em %s", ata_path)
+    from wendes.assistant.search import index_safely
+
+    index_safely(store.data_dir, run_dir, record.date, record.started_at)
 
     try:
         send_ata(cfg, ata, record.date)

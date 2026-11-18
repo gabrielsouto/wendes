@@ -20,5 +20,5 @@ jobs:
           cache-dependency-path: pyproject.toml
       # Sem "playwright install" e sem baixar modelos: os testes usam fakes.
       - run: pip install -e .[dev]
-      - run: ruff check src tests
+      - run: ruff check src tests scripts
       - run: pytest

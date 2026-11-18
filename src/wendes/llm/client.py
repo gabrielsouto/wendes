@@ -35,6 +35,8 @@ class Llm:
         max_tokens: int = 1024,
         timeout: float | None = None,
         continue_on_length: bool = False,
+        response_format: dict | None = None,
+        extra_body: dict | None = None,
     ) -> str:
         """Pergunta ao LLM; `timeout` sobrepõe o do config para chamadas longas (ata).
 
@@ -48,8 +50,13 @@ class Llm:
             {"role": "system", "content": system or self.system_prompt},
             {"role": "user", "content": prompt},
         ]
+        extra: dict = {}
+        if response_format is not None:  # saída estruturada (modo assist)
+            extra["response_format"] = response_format
+        if extra_body is not None:
+            extra["extra_body"] = extra_body
         resp = client.chat.completions.create(
-            model=self.model, messages=messages, max_tokens=max_tokens
+            model=self.model, messages=messages, max_tokens=max_tokens, **extra
         )
         text = resp.choices[0].message.content or ""
         if continue_on_length and resp.choices[0].finish_reason == "length":

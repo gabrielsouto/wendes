@@ -1,0 +1,332 @@
+"""Pós-reunião do modo assist (F8), chamado por `finalize_meeting(mode="assist")`.
+
+1. Retranscrição em lote (`word_timestamps=True`) e atribuição de falas com a
+   mesma linha do tempo de níveis da reunião (se houver e estiver habilitada).
+2. Ata a partir das notas ao vivo (ver `build_ata`).
+3. Histórico, índice de busca, ações, e-mail, webhooks e página exportada.
+
+Cada etapa tolera a própria falha: a ata nunca se perde.
+"""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+from wendes.assistant.state import MeetingState
+from wendes.config import Config
+from wendes.facilitator.state_machine import MeetingRecord
+from wendes.speech.stt_batch import TranscriptSegment
+
+log = logging.getLogger(__name__)
+
+MIN_AUDIO_SECONDS = 1.0
+
+
+def attribute_transcript(
+    cfg: Config, run_dir: Path, transcript: list[TranscriptSegment]
+) -> list[TranscriptSegment]:
+    """Atribui falantes aos segmentos em lote, quebrando onde o dominante muda ≥ 1 s."""
+    from wendes.assistant.speakers import load_levels, split_by_speaker
+    from wendes.facilitator.stealth import canonical_name
+
+    sp = cfg.assistant.speakers
+    path = run_dir / "audio_levels.jsonl"
+    if not sp.enabled or not path.exists():
+        return transcript
+    # os tempos do arquivo da sessão já têm o offset descontado
+    levels, _, names = load_levels(path)
+    if not levels:
+        return transcript
+    out: list[TranscriptSegment] = []
+    for seg in transcript:
+        if not seg.words:
+            from wendes.assistant.speakers import attribute_levels
+
+            pid, conf = attribute_levels(levels, seg.start, seg.end, sp.min_share, sp.min_samples)
+            name = canonical_name(cfg, names.get(pid, pid)) if pid else ""
+            out.append(TranscriptSegment(seg.start, seg.end, seg.text, name, round(conf, 3)))
+            continue
+        for span in split_by_speaker(seg.words, levels, 1.0, sp.min_share, sp.min_samples):
+            name = canonical_name(cfg, names.get(span.pid, span.pid)) if span.pid else ""
+            out.append(
+                TranscriptSegment(span.start, span.end, span.text, name, round(span.conf, 3))
+            )
+    return out
+
+
+def batch_transcript(cfg: Config, run_dir: Path, wav_path: Path) -> list[TranscriptSegment] | None:
+    from wendes.pipeline import wav_seconds
+    from wendes.speech import stt_batch
+
+    seconds = wav_seconds(wav_path)
+    if seconds <= MIN_AUDIO_SECONDS:
+        log.info("Sem áudio gravado suficiente — pulando a retranscrição")
+        return None
+    log.info(
+        "Reunião encerrada — retranscrevendo %.1f min com o modelo %s",
+        seconds / 60, cfg.stt.batch_model,
+    )
+    try:
+        transcript = stt_batch.transcribe_recording(cfg, wav_path, word_timestamps=True)
+    except Exception:  # noqa: BLE001 — sem transcrição em lote, vale a ao vivo
+        log.exception("Falha na retranscrição em lote — seguindo com a transcrição ao vivo")
+        return None
+    try:
+        transcript = attribute_transcript(cfg, run_dir, transcript)
+    except Exception:  # noqa: BLE001
+        log.exception("Falha na atribuição de falas em lote — segue sem falantes")
+    stt_batch.save_transcript(run_dir, transcript, cfg.stt.corrections)
+    return transcript
+
+
+_env = None
+
+
+def _jinja():
+    global _env
+    if _env is None:
+        from jinja2 import Environment, FileSystemLoader
+
+        from wendes.assistant.state import mmss
+
+        _env = Environment(
+            loader=FileSystemLoader(Path(__file__).parent / "templates"),
+            trim_blocks=False,
+            lstrip_blocks=False,
+        )
+        _env.filters["mmss"] = lambda t: mmss(float(t or 0))
+        _env.filters["cell"] = lambda s: str(s).replace("|", "\\|").replace("\n", " ")
+    return _env
+
+
+def load_notes(run_dir: Path):
+    import json
+
+    from wendes.assistant.notes import Notes
+
+    path = run_dir / "notes.json"
+    if not path.exists():
+        return Notes()
+    try:
+        return Notes.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    except ValueError:
+        log.warning("notes.json ilegível — ata sem notas")
+        return Notes()
+
+
+def ata_summary(cfg: Config, llm, notes) -> str:
+    from wendes.assistant import prompts_ptbr as P
+    from wendes.assistant.notes import full_view, recap_fallback
+
+    lines = full_view(notes)
+    if not lines:
+        return "A reunião não gerou notas (pouca fala transcrita ou LLM indisponível)."
+    if llm is not None:
+        from wendes.assistant.budget import Part, fit
+
+        budget = max(1000, cfg.llm.context_tokens - 1200)
+        text = "\n".join(fit([Part("n", lines, budget)], budget)["n"])
+        resp = llm.ask_or_none(
+            P.ATA_SUMMARY.format(notas=text),
+            system=P.system(cfg.room.bot_display_name, cfg.team.name),
+            max_tokens=600,
+            timeout=180.0,
+        )
+        if resp:
+            return resp.strip()
+    return recap_fallback(notes)
+
+
+def build_ata(
+    cfg: Config,
+    llm,
+    record: MeetingRecord,
+    state: MeetingState,
+    *,
+    room_url: str | None,
+    duration_s: float,
+    page_path: Path | None = None,
+) -> str:
+    from wendes.assistant.state import mmss
+
+    notes = load_notes(state.run_dir) if state.run_dir else None
+    if notes is None:
+        from wendes.assistant.notes import Notes
+
+        notes = Notes()
+    return _jinja().get_template("ata_assist.md.j2").render(
+        date=record.date,
+        started_at=record.started_at,
+        duration=mmss(duration_s),
+        room_url=room_url or cfg.room.url,
+        attendees=[p.name for p in record.people if p.present],
+        interrupted=record.interrupted,
+        error=record.error,
+        summary=ata_summary(cfg, llm, notes),
+        notes=notes,
+        artifacts=state.artifacts,
+        qa=state.qa,
+        page_path=str(page_path) if page_path else "",
+    )
+
+
+def evidence_text(state: MeetingState, ts: float | None) -> str:
+    from wendes.assistant.state import mmss
+
+    if ts is None:
+        return ""
+    for seg in state.segments:
+        if not seg.marker and seg.start - 1 <= ts <= seg.end + 1:
+            return f"[{mmss(seg.start)}] {seg.text}"
+    return f"[{mmss(ts)}]"
+
+
+def save_actions(cfg: Config, store, run_dir: Path, record: MeetingRecord, state: MeetingState,
+                 room_url: str, distribute: bool) -> None:
+    """Grava action_items, resolve pendências, salva e envia o payload do webhook."""
+    from wendes.assistant.actions import (
+        ActionStore,
+        build_payload,
+        post_actions,
+        save_payload,
+    )
+
+    notes = load_notes(run_dir)
+    st = ActionStore(store.data_dir / "history.sqlite")
+    try:
+        db_ids = st.save_meeting(
+            date=record.date, started_at=record.started_at, room_url=room_url, notes=notes
+        )
+        evidence: dict[str, str] = {}
+        for p in notes.pendencias_anteriores:
+            if p.status in ("concluida", "cancelada") and p.db_id:
+                evidence[p.id] = evidence_text(state, p.evidencia_ts)
+                st.resolve(p.db_id, p.status, date=record.date, started_at=record.started_at,
+                           evidencia=evidence[p.id])
+    finally:
+        st.close()
+    payload = build_payload(
+        date=record.date, started_at=record.started_at, room_url=room_url,
+        team=cfg.team.name, notes=notes, db_ids=db_ids, evidence=evidence,
+    )
+    save_payload(run_dir, payload)
+    url = cfg.distribution.actions_webhook_url
+    if distribute and url:
+        post_actions(url, payload)
+
+
+def catch_up_notes(cfg: Config, llm, state: MeetingState, record: MeetingRecord,
+                   max_rounds: int = 10) -> int:
+    """Sessão que caiu: processa, sem asyncio, a transcrição que as notas não cobriram.
+
+    Retorna quantas rodadas rodaram. Falha do LLM só encerra o catch-up.
+    """
+    from wendes.assistant import prompts_ptbr as P
+    from wendes.assistant.notes import NotesUpdater
+
+    if llm is None or state.run_dir is None:
+        return 0
+    was = state.persist
+    state.persist = True  # o updater grava notes.json/notes_ops.jsonl
+    try:
+        upd = NotesUpdater(
+            state, None, llm,
+            system=P.system(cfg.room.bot_display_name, cfg.team.name),
+            context_tokens=cfg.llm.context_tokens,
+            structured_mode=cfg.llm.structured_output, vllm_key=cfg.llm.vllm_guided_key,
+            owner_names={p.name for p in record.people},
+        )
+        rounds = 0
+        while rounds < max_rounds and upd.has_new():
+            try:
+                resp, chosen = upd._ask_ops()
+            except Exception:  # noqa: BLE001
+                log.warning("Catch-up das notas: LLM falhou", exc_info=True)
+                break
+            if not chosen or resp is None:
+                break
+            upd.apply(resp.ops, chosen)
+            rounds += 1
+        if rounds:
+            state.notes = upd.notes.model_dump()
+            log.info("Catch-up das notas: %d rodada(s)", rounds)
+        return rounds
+    finally:
+        state.persist = was
+
+
+def export_safely(state: MeetingState, run_dir: Path) -> Path | None:
+    """Gera page/index.html autocontido; falha só gera log."""
+    from wendes.assistant.web.export import export_page
+
+    try:
+        notes = load_notes(run_dir)
+        state.notes = notes.model_dump()
+        return export_page(state, run_dir / "page")
+    except Exception:  # noqa: BLE001
+        log.exception("Falha ao exportar a página da reunião")
+        return None
+
+
+def finalize_assist(
+    cfg: Config,
+    store,
+    run_dir: Path,
+    record: MeetingRecord,
+    wav_path: Path,
+    *,
+    room_url: str | None = None,
+    distribute: bool = True,
+    llm=None,
+    state: MeetingState | None = None,
+) -> Path:
+    from wendes.pipeline import wav_seconds
+
+    record.mode = "assist"
+    if state is None:  # sessão caiu ou resummarize: alcança as notas antes da ata
+        state = MeetingState.load(run_dir, date=record.date, started_at=record.started_at)
+        catch_up_notes(cfg, llm, state, record)
+    duration = wav_seconds(wav_path) or (state.segments[-1].end if state.segments else 0.0)
+    batch_transcript(cfg, run_dir, wav_path)
+    page = export_safely(state, run_dir)
+    ata = build_ata(cfg, llm, record, state, room_url=room_url, duration_s=duration,
+                    page_path=page)
+    attachments = None
+    if cfg.distribution.attach_artifacts:
+        from wendes.assistant.artifacts import ArtifactStore
+
+        attachments = ArtifactStore(run_dir).latest_files() or None
+    path = _save_and_distribute(cfg, store, run_dir, record, ata, distribute, attachments)
+    if store is not None:
+        try:
+            save_actions(cfg, store, run_dir, record, state, room_url or cfg.room.url, distribute)
+        except Exception:  # noqa: BLE001 — a ata já saiu; ações são acessórias
+            log.exception("Falha ao gravar/enviar as ações da reunião")
+    return path
+
+
+def _save_and_distribute(cfg, store, run_dir: Path, record, ata: str, distribute: bool,
+                         attachments: list[Path] | None = None) -> Path:
+    from wendes.distribution.email import send_ata
+    from wendes.distribution.webhook import post_ata
+
+    if store is not None:
+        from wendes.assistant.search import index_safely
+
+        ata_path = store.save(record, ata)
+        index_safely(store.data_dir, run_dir, record.date, record.started_at)
+    else:
+        ata_path = run_dir / "ata.md"
+        ata_path.write_text(ata, encoding="utf-8")
+    log.info("Ata salva em %s", ata_path)
+    if not distribute:
+        return ata_path
+    try:
+        send_ata(cfg, ata, record.date, attachments=attachments)
+    except Exception:  # noqa: BLE001
+        log.exception("Falha ao enviar a ata por e-mail")
+    try:
+        post_ata(cfg, ata)
+    except Exception:  # noqa: BLE001
+        log.exception("Falha ao publicar a ata no webhook")
+    return ata_path

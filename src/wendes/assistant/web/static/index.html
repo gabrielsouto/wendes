@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Wendes · reunião</title>
+<link rel="stylesheet" href="{{BASE}}/style.css">
+<script src="{{BASE}}/vendor/marked.min.js"></script>
+<script src="{{BASE}}/vendor/purify.min.js"></script>
+<script src="{{BASE}}/vendor/mermaid.min.js"></script>
+</head>
+<body data-mode="{{MODE}}">
+<header id="top">
+  <div class="title">
+    <strong id="h-room">Wendes</strong>
+    <span id="h-start" class="muted"></span>
+  </div>
+  <div class="badges">
+    <span id="h-status" class="badge">…</span>
+    <span id="h-duration" class="badge" title="duração">00:00</span>
+    <span id="h-lag" class="badge" title="atraso da transcrição ao vivo">STT 0 s</span>
+    <span id="h-llm" class="badge" title="pedidos na fila do LLM">LLM 0</span>
+  </div>
+  <div id="h-participants" class="muted small"></div>
+</header>
+
+<nav id="tabs" aria-label="seções">
+  <button data-tab="transcricao" class="active">Transcrição</button>
+  <button data-tab="notas">Notas</button>
+  <button data-tab="acoes">Ações</button>
+  <button data-tab="artefatos">Artefatos</button>
+  <button data-tab="perguntas">Perguntas</button>
+</nav>
+
+<main>
+  <section id="transcricao" class="panel active">
+    <div class="toolbar">
+      <input id="t-search" type="search" placeholder="Buscar na transcrição…" aria-label="buscar">
+      <label class="small"><input id="t-autoscroll" type="checkbox" checked> rolar sozinho</label>
+    </div>
+    <ol id="t-list" class="transcript"></ol>
+  </section>
+
+  <section id="notas" class="panel">
+    <h2>Notas</h2>
+    <div id="n-body" class="muted">Ainda sem notas.</div>
+  </section>
+
+  <section id="acoes" class="panel">
+    <h2>Ações desta reunião</h2>
+    <div id="a-body" class="muted">Nenhuma ação registrada.</div>
+    <h2>Pendências de reuniões anteriores</h2>
+    <div id="p-body" class="muted">Nenhuma pendência anterior.</div>
+  </section>
+
+  <section id="artefatos" class="panel">
+    <div id="art-tabs" class="subtabs"></div>
+    <div id="art-body" class="muted">Nenhum artefato ainda. Peça no chat: /doc, /diagrama, /cronograma ou /checklist.</div>
+  </section>
+
+  <section id="perguntas" class="panel">
+    <h2>Perguntas</h2>
+    <div id="q-body" class="muted">Nenhuma pergunta ainda. No chat: /wendes &lt;pergunta&gt;.</div>
+  </section>
+</main>
+
+<footer class="muted small">Gerado localmente pelo Wendes. Nada desta página sai da máquina.</footer>
+<script type="module" src="{{BASE}}/app.js"></script>
+</body>
+</html>

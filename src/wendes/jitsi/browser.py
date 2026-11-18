@@ -48,7 +48,7 @@ class JitsiBrowser:
         self.browser: Browser | None = None
         self.page: Page | None = None
 
-    async def start(self, headless: bool = False) -> Page:
+    async def start(self, headless: bool = False, extra_args: list[str] | None = None) -> Page:
         env = {
             **os.environ,
             "PULSE_SOURCE": "bot_mic",   # microfone do bot = monitor do bot_mic_sink
@@ -60,7 +60,7 @@ class JitsiBrowser:
         self.browser = await self._pw.chromium.launch(
             # headless "novo" tem áudio WebRTC quebrado; na reunião, rodar sob Xvfb
             headless=headless,
-            args=CHROMIUM_ARGS,
+            args=CHROMIUM_ARGS + list(extra_args or []),
             env=env,
             **extra,
         )

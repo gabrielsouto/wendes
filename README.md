@@ -67,6 +67,7 @@ scripts/setup_audio.sh        # cria os dispositivos de áudio virtuais (idempot
 scripts/run_wendes.sh join-test   # teste: entra na sala, fala e lista participantes
 scripts/run_wendes.sh run         # conduz a daily completa
 scripts/run_wendes.sh stealth     # só grava/transcreve; /fim encerra
+scripts/run_wendes.sh assist      # assistente de qualquer reunião (ver "Modo assistente")
 .venv/bin/wendes resummarize 2026-07-03   # regera a ata de uma data (--retranscribe, --no-email)
 ```
 
@@ -101,6 +102,60 @@ systemctl --user stop wendes@stealth            # encerra a reunião e gera a at
 
 O `systemctl --user stop` (ou um Ctrl+C no terminal) encerra a reunião como `/encerrar` ou `/fim` e gera a ata antes de sair. O `ExecStop` da unit ([scripts/stop_wendes.sh](scripts/stop_wendes.sh)) manda o SIGTERM só ao processo Python e espera a ata ficar pronta; só depois o systemd derruba o Xvfb e o Chromium. O `TimeoutStopSec=1h` dá tempo para a retranscrição. Um segundo sinal sai na hora, sem ata. O código de saída é 1 quando a reunião caiu no meio, mesmo com a ata gerada, para o systemd registrar a falha.
 
+## Modo assistente (`wendes assist`)
+
+Além de conduzir a daily, o Wendes pode participar de **qualquer reunião** como assistente visível: transcreve ao vivo, mantém notas (tópicos, decisões, ações, perguntas em aberto), responde perguntas por chat ou voz, constrói artefatos (documento, diagrama, cronograma, checklist, tabela) e publica tudo numa página ao vivo. No fim, gera a ata, exporta a página para abrir offline e grava as ações para cobrar na próxima reunião da mesma sala. A especificação completa está em [docs/SPEC_MODO_ASSISTENTE.md](docs/SPEC_MODO_ASSISTENTE.md).
+
+```bash
+scripts/run_wendes.sh assist [--url <sala>]     # ou systemctl --user start wendes@assist
+.venv/bin/wendes assist --replay 2026-11-18 --hora 09:30 --speed 4   # sem Jitsi, a partir do recording.wav
+.venv/bin/wendes ask "o que decidimos sobre o banco?" [--date 2026-11-18]
+.venv/bin/wendes serve                           # histórico: reuniões, páginas, busca e perguntas
+.venv/bin/wendes reindex                         # (re)indexa o histórico para a busca
+.venv/bin/wendes send-actions 2026-11-18         # reenvia o webhook de ações
+```
+
+**Comandos no chat** (`/ajuda` lista os que a pessoa pode usar):
+
+| Comando | Quem | Efeito |
+|---|---|---|
+| `/wendes <pergunta>` ou `@wendes …` | `permissions.ask` | Pergunta sobre a reunião (e, com permissão, sobre as anteriores) |
+| "Wendes, …" por voz | membros | Mesma coisa, falando; reunião anterior só pelo chat |
+| `/resumo`, `/acoes`, `/pendencias` | todos | Recap, ações desta reunião, pendências anteriores |
+| `/doc`, `/diagrama`, `/cronograma`, `/checklist`, `/tabela` `[#id] <pedido>` | `permissions.artifacts` | Cria artefato, ou nova versão com `#id` |
+| `/pausar`, `/retomar` | todos | Pausa a gravação (grava silêncio) |
+| `/link` | admin | Envia o link da página no privado |
+| `/cobrar` | admin | Lê em voz alta as pendências e pergunta se foram resolvidas |
+| `/tela`, `/tela off` | admin | Experimental: compartilha a página como tela do bot ([docs/TELA_COMPARTILHADA.md](docs/TELA_COMPARTILHADA.md)) |
+| `/fim` (ou `/encerrar`) | admin | Encerra e gera a ata |
+
+Os admins se autenticam com `/auth <código>` no privado, como no modo daily.
+
+**Página ao vivo.** Sobe em `assistant.web.host:port` com um token novo por execução; o link com token fica em `data/<data>/<hora>/page_link.txt` (0600) e vai no privado para os admins via `/link`. Para abrir de outra máquina, use `host: 0.0.0.0` e `public_base_url`. Sem token: 403. A página não usa CDN: marked, DOMPurify e mermaid ficam em `src/wendes/assistant/web/static/vendor/` (atualize com `scripts/vendor_js.sh`, que confere os sha256).
+
+**No fim da reunião** saem, em `data/<data>/<hora>/`: `ata.md` (a partir das notas ao vivo; o rodapé aponta a página), `page/index.html` (autocontida, abre offline), `transcript.json` (retranscrição em lote, usada na busca), `notes.json`, `artifacts/` e `actions_payload.json`. Se a sessão cair, o fechamento roda um *catch-up* das notas sobre a transcrição ao vivo antes de gerar a ata.
+
+**`wendes serve`.** Servidor persistente do histórico em `assistant.web.port + 1`. Exige `WENDES_WEB_TOKEN` no `.env` (não sobe sem ele); abra `http://<host>:<porta>/?token=<token>` uma vez e o cookie vale dali em diante.
+
+**Configuração.** Tudo em `assistant:`, `actions:`, `data_retention:` e nos campos novos de `llm:`/`distribution:` do [config.example.yaml](config.example.yaml). Os principais:
+
+| Chave | Padrão | O que faz |
+|---|---|---|
+| `llm.context_tokens` | `8192` | Janela do modelo; os orçamentos de notas e perguntas derivam daqui |
+| `llm.structured_output` | `json_object` | `none`, `json_object`, `vllm_guided` ou `ollama_format` |
+| `assistant.notes.interval_s` | `120` | Rodada de notas (ou antes, a cada `min_new_chars`) |
+| `assistant.permissions.history` | `admins` | Quem consulta reuniões anteriores (só pelo chat e sem desconhecidos na sala) |
+| `assistant.unknown_participant` | `warn` | `allow`, `warn`, `pause` ou `leave` quando entra alguém fora do `team.members` |
+| `assistant.speakers.enabled` | `false` | Atribuição de falante pelo nível de áudio do Jitsi; ligue só depois da medição de [docs/SPIKE_FALANTES.md](docs/SPIKE_FALANTES.md) |
+| `distribution.actions_webhook_url` | `""` | POST das ações estruturadas no fim |
+| `data_retention.recording_days` | `30` | Apaga `recording.wav` antigos (ata e notas nunca são apagadas) |
+
+**Hardware.** O cenário de referência é o **LLM em GPU** (vLLM) e o Whisper ao vivo na CPU. Se o LLM dividir a CPU com o Whisper, a transcrição atrasa; acima de `assistant.stt.max_lag_s` o bot descarta o áudio mais antigo e marca uma lacuna, e a página mostra o atraso. A fila do LLM prioriza perguntas humanas sobre notas e tarefas de fundo.
+
+**Replay.** `wendes assist --replay` roda o pipeline inteiro (transcrição, falantes a partir de `audio_levels.jsonl`, notas, perguntas, artefatos e página) sobre uma gravação, com um "chat" no terminal: digite `/resumo` ou `/wendes quem ficou de revisar o PR?`. `--speed 0` vai o mais rápido possível. É a ferramenta para ajustar prompts sem reunião.
+
+**Testes manuais** (dependem de Jitsi, GPU ou rede e não rodam no CI): medição da Fase 0 (`scripts/spike_speakers.py` + `scripts/eval_speakers.py`); página atualizando em outra máquina; `page/index.html` abrindo offline no Firefox e no Chrome; reunião real de 1 h com memória estável, ata, uma pergunta, um artefato e um `/resumo`; `/tela` no meet.jit.si.
+
 ## Como funciona
 
 O bot abre a sala num Chromium headless (Playwright) sob Xvfb. O áudio flui por dispositivos virtuais do PulseAudio: o TTS (Piper) toca num sink que é remapeado como "microfone" do navegador, e o áudio da sala sai num sink cujo monitor é gravado e transcrito ao vivo pelo faster-whisper. Um LLM (qualquer endpoint OpenAI-compatible) decide follow-ups e escreve a ata; se estiver indisponível, o bot segue com regras fixas e a ata sai com um resumo básico.
@@ -122,7 +177,7 @@ Chromium/Jitsi ──▶ bot_out ──▶ gravação + faster-whisper ──▶
 ```bash
 .venv/bin/pip install -e .[dev]
 .venv/bin/pytest
-.venv/bin/ruff check src tests
+.venv/bin/ruff check src tests scripts
 ```
 
 Os testes não dependem de Jitsi, navegador, PulseAudio, modelos baixados nem de LLM no ar: usam os fakes de [tests/conftest.py](tests/conftest.py). O CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) roda o ruff e o pytest em Python 3.11 e 3.12.

@@ -215,6 +215,59 @@ def save_actions(cfg: Config, store, run_dir: Path, record: MeetingRecord, state
         post_actions(url, payload)
 
 
+def catch_up_notes(cfg: Config, llm, state: MeetingState, record: MeetingRecord,
+                   max_rounds: int = 10) -> int:
+    """Sessão que caiu: processa, sem asyncio, a transcrição que as notas não cobriram.
+
+    Retorna quantas rodadas rodaram. Falha do LLM só encerra o catch-up.
+    """
+    from wendes.assistant import prompts_ptbr as P
+    from wendes.assistant.notes import NotesUpdater
+
+    if llm is None or state.run_dir is None:
+        return 0
+    was = state.persist
+    state.persist = True  # o updater grava notes.json/notes_ops.jsonl
+    try:
+        upd = NotesUpdater(
+            state, None, llm,
+            system=P.system(cfg.room.bot_display_name, cfg.team.name),
+            context_tokens=cfg.llm.context_tokens,
+            structured_mode=cfg.llm.structured_output, vllm_key=cfg.llm.vllm_guided_key,
+            owner_names={p.name for p in record.people},
+        )
+        rounds = 0
+        while rounds < max_rounds and upd.has_new():
+            try:
+                resp, chosen = upd._ask_ops()
+            except Exception:  # noqa: BLE001
+                log.warning("Catch-up das notas: LLM falhou", exc_info=True)
+                break
+            if not chosen or resp is None:
+                break
+            upd.apply(resp.ops, chosen)
+            rounds += 1
+        if rounds:
+            state.notes = upd.notes.model_dump()
+            log.info("Catch-up das notas: %d rodada(s)", rounds)
+        return rounds
+    finally:
+        state.persist = was
+
+
+def export_safely(state: MeetingState, run_dir: Path) -> Path | None:
+    """Gera page/index.html autocontido; falha só gera log."""
+    from wendes.assistant.web.export import export_page
+
+    try:
+        notes = load_notes(run_dir)
+        state.notes = notes.model_dump()
+        return export_page(state, run_dir / "page")
+    except Exception:  # noqa: BLE001
+        log.exception("Falha ao exportar a página da reunião")
+        return None
+
+
 def finalize_assist(
     cfg: Config,
     store,
@@ -230,10 +283,14 @@ def finalize_assist(
     from wendes.pipeline import wav_seconds
 
     record.mode = "assist"
-    state = state or MeetingState.load(run_dir, date=record.date, started_at=record.started_at)
+    if state is None:  # sessão caiu ou resummarize: alcança as notas antes da ata
+        state = MeetingState.load(run_dir, date=record.date, started_at=record.started_at)
+        catch_up_notes(cfg, llm, state, record)
     duration = wav_seconds(wav_path) or (state.segments[-1].end if state.segments else 0.0)
     batch_transcript(cfg, run_dir, wav_path)
-    ata = build_ata(cfg, llm, record, state, room_url=room_url, duration_s=duration)
+    page = export_safely(state, run_dir)
+    ata = build_ata(cfg, llm, record, state, room_url=room_url, duration_s=duration,
+                    page_path=page)
     attachments = None
     if cfg.distribution.attach_artifacts:
         from wendes.assistant.artifacts import ArtifactStore

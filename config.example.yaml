@@ -90,6 +90,15 @@ llm:
   base_url: "http://localhost:8000/v1"
   model: "meu-modelo"
   timeout_seconds: 30
+  # --- modo assist ---
+  # Janela de contexto do modelo: os orçamentos de notas/perguntas saem daqui
+  context_tokens: 8192
+  # Requisições simultâneas ao LLM (servidor local: 1; a fila prioriza humanos)
+  max_concurrency: 1
+  # Como pedir JSON: none | json_object | vllm_guided | ollama_format
+  structured_output: json_object
+  # No vllm_guided: "guided_json" (vLLM antigo) ou "structured_outputs" (vLLM novo)
+  vllm_guided_key: guided_json
 
 browser:
   # Caminho do Chromium. Vazio: usa /usr/bin/chromium-browser se existir, senão
@@ -104,5 +113,49 @@ distribution:
   email_to: []
   # POST da ata em JSON (Slack/Discord/Teams via webhook, por exemplo)
   webhook_url: ""
+  # Modo assist: POST das ações estruturadas no fim da reunião (wendes send-actions reenvia)
+  actions_webhook_url: ""
+  # Modo assist: anexa os artefatos (.md/.mmd) ao e-mail da ata
+  attach_artifacts: true
+
+# ---- Modo assistente (wendes assist) -------------------------------------------
+assistant:
+  greeting: "Olá, sou o Wendes, assistente desta reunião. Estou transcrevendo para gerar notas e a ata. Qualquer pessoa pode pausar com /pausar no chat."
+  speak_greeting: true
+  wake_word: ""                 # vazio = room.bot_display_name
+  wake_word_aliases: ["vendes", "wendis", "uendes"]
+  voice_trigger: true           # "Wendes, <pergunta>" por voz
+  voice_answers: true           # responde perguntas de voz falando (e no chat)
+  stt:
+    silence_s: 0.8              # silêncio que fecha um enunciado
+    max_utterance_s: 20
+    max_lag_s: 30               # atraso acima disso descarta áudio e marca lacuna
+  speakers:
+    enabled: false              # atribuição por nível de áudio; ver docs/SPIKE_FALANTES.md
+    latency_offset_s: 0.0
+    min_share: 0.6
+    min_samples: 3
+  notes:
+    interval_s: 120             # rodada de notas a cada N s (ou antes, com min_new_chars)
+    min_new_chars: 1500
+    compact_every_s: 900
+  permissions:
+    ask: members                # all | members | admins
+    history: admins             # admins | members | none (consultar reuniões anteriores)
+    artifacts: members          # all | members | admins
+  unknown_participant: warn     # allow | warn | pause | leave
+  web:
+    host: "127.0.0.1"           # 0.0.0.0 para abrir na rede local
+    port: 8765                  # wendes serve usa port + 1 por padrão
+    public_base_url: ""         # ex.: http://servidor.lan:8765
+    allow_edit: false           # edição de artefatos pela página
+  screen_share: false           # experimental (F10): /tela compartilha a página no Jitsi
+
+actions:
+  lookback_days: 14             # pendências abertas da mesma sala nesse período
+
+data_retention:
+  recording_days: 30            # apaga recording.wav depois de N dias (0 = nunca)
+  transcript_days: 0            # apaga transcrições depois de N dias (0 = nunca)
 
 data_dir: "data"

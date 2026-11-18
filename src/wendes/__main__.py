@@ -85,6 +85,15 @@ def cmd_check() -> int:
     else:
         print("⚠ FIREBASE_REFRESH_TOKEN não configurado — ver docs/OBTER_REFRESH_TOKEN.md")
 
+    from wendes.assistant.checks import check_assist
+
+    print("— modo assist —")
+    for good, msg in check_assist(cfg):
+        print(("✔ " if good else "✘ ") + msg)
+        ok = ok and good
+    if not cfg.secrets.wendes_web_token:
+        print("ℹ WENDES_WEB_TOKEN vazio: `wendes serve` não sobe (o assist gera token próprio)")
+
     return 0 if ok else 1
 
 
@@ -630,6 +639,29 @@ def cmd_resummarize(
     return 0
 
 
+def cmd_serve(host: str | None, port: int | None) -> int:
+    cfg = load_config()
+    token = cfg.secrets.wendes_web_token
+    if not token:
+        print("WENDES_WEB_TOKEN não configurado no .env — o serve não sobe sem token.")
+        return 1
+
+    from wendes.assistant.web.archive import ArchiveServer, make_ask
+    from wendes.history.store import HistoryStore
+    from wendes.llm.client import Llm
+
+    HistoryStore(cfg).db.close()  # garante o schema
+    server = ArchiveServer(cfg.resolve(cfg.data_dir), token, ask=make_ask(cfg, Llm(cfg)))
+    host = host or cfg.assistant.web.host
+    port = port or cfg.assistant.web.port + 1
+    print(f"wendes serve em http://{host}:{port}/?token=<WENDES_WEB_TOKEN>")
+    try:
+        asyncio.run(server.run(host, port))
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="wendes")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -671,6 +703,9 @@ def main() -> None:
     p_ask.add_argument("--date", default=None, help="AAAA-MM-DD de uma reunião específica")
     p_ask.add_argument("--hora", default=None, help="HH:MM (com --date)")
     sub.add_parser("reindex", help="indexa o histórico para a busca das perguntas")
+    p_sv = sub.add_parser("serve", help="servidor do histórico: reuniões, busca, perguntas")
+    p_sv.add_argument("--host", default=None, help="default: assistant.web.host")
+    p_sv.add_argument("--port", type=int, default=None, help="default: assistant.web.port + 1")
     p_sa = sub.add_parser("send-actions", help="reenvia o webhook de ações de uma reunião")
     p_sa.add_argument("date", help="AAAA-MM-DD")
     p_sa.add_argument("--hora", default=None, help="HH:MM (default: a última do dia)")
@@ -707,6 +742,8 @@ def main() -> None:
         sys.exit(cmd_send_actions(args.date, args.hora))
     if args.command == "reindex":
         sys.exit(cmd_reindex())
+    if args.command == "serve":
+        sys.exit(cmd_serve(args.host, args.port))
     if args.command == "resummarize":
         sys.exit(
             cmd_resummarize(

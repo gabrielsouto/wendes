@@ -126,7 +126,7 @@ scripts/run_wendes.sh assist [--url <sala>]     # ou systemctl --user start wend
 | `/pausar`, `/retomar` | todos | Pausa a gravação (grava silêncio) |
 | `/link` | admin | Envia o link da página no privado |
 | `/cobrar` | admin | Lê em voz alta as pendências e pergunta se foram resolvidas |
-| `/tela`, `/tela off` | admin | Experimental: compartilha a página como tela do bot |
+| `/tela`, `/tela off` | admin | Experimental: compartilha a página como tela do bot ([docs/TELA_COMPARTILHADA.md](docs/TELA_COMPARTILHADA.md)) |
 | `/fim` (ou `/encerrar`) | admin | Encerra e gera a ata |
 
 Os admins se autenticam com `/auth <código>` no privado, como no modo daily.

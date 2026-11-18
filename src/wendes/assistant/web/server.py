@@ -110,6 +110,11 @@ class WebServer:
         url = f"{self.base_url}/m/{self.state.run_id}"
         return f"{url}?token={self.token}" if with_token else url
 
+    def local_url(self) -> str:
+        """URL com token para um navegador nesta máquina (ex.: a aba do /tela)."""
+        host = "127.0.0.1" if self.host in ("0.0.0.0", "", "::") else self.host
+        return f"http://{host}:{self.port}/m/{self.state.run_id}?token={self.token}"
+
     async def start(self) -> None:
         self._runner = web.AppRunner(self.app, access_log=None)
         await self._runner.setup()

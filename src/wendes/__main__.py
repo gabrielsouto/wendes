@@ -359,6 +359,14 @@ def _assist_attendees(cfg, record, participants) -> None:
             record.people.append(PersonRecord(name=name, present=True))
 
 
+def _screen_share(cfg, page):
+    if not cfg.assistant.screen_share:
+        return None
+    from wendes.jitsi.screen import ScreenShare
+
+    return ScreenShare(page)
+
+
 async def _assist(max_hours: float, room_url: str | None = None) -> int:
     """Modo assist: entra visível, transcreve, mantém notas e responde no chat/voz."""
     cfg = load_config()
@@ -401,8 +409,13 @@ async def _assist(max_hours: float, room_url: str | None = None) -> int:
     capture = AudioCapture(wav_path)
     session = None
     joined = False
+    screen_args: list[str] = []
+    if cfg.assistant.screen_share:
+        from wendes.jitsi.screen import screen_share_args
+
+        screen_args = screen_share_args()
     try:
-        page = await browser.start()
+        page = await browser.start(extra_args=screen_args)
         try:
             guest_url = await enter_room(
                 page, cfg, cfg.secrets.firebase_refresh_token, room_url=room_url
@@ -433,6 +446,7 @@ async def _assist(max_hours: float, room_url: str | None = None) -> int:
             transcribe=transcribe, vad=silero_vad,
             speak=make_room_speaker(cfg, room, tts) if tts is not None else None,
             llm=llm,
+            screen=_screen_share(cfg, page),
         )
         stopper.on_meeting_stop(lambda: session.end("sinal de parada"))
         await capture.start()

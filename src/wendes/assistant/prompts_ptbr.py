@@ -29,6 +29,15 @@ LINK_PRIVATE = (
     "🔗 Página da reunião (tem a transcrição inteira, não repasse): {url}"
 )
 LINK_PUBLIC_REFUSED = "Por segurança, mando o link só por mensagem privada. Use /link em privado."
+SCREEN_DISABLED = (
+    "Compartilhar a página como tela está desligado (assistant.screen_share: false)."
+)
+SCREEN_ON = "Compartilhando a página da reunião como tela. /tela off para parar."
+SCREEN_OFF = "Parei de compartilhar a tela."
+SCREEN_NOT_ACTIVE = "Não estou compartilhando a tela."
+SCREEN_FAILED = (
+    "Não consegui compartilhar a tela (o Jitsi não confirmou). Use /link para abrir a página."
+)
 LINK_UNAVAILABLE = "A página da reunião não está disponível nesta execução."
 END = "⏹ Encerrando. A ata sai em instantes."
 NO_PERMISSION = "{nome}: você não tem permissão para {acao}."

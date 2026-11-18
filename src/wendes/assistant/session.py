@@ -56,8 +56,10 @@ class AssistantSession:
         web: bool = True,
         max_lag_s: float | None = None,
         vad_in_thread: bool = True,
+        screen=None,
     ) -> None:
         self.cfg = cfg
+        self.screen = screen  # F10: jitsi.screen.ScreenShare (ou fake nos testes)
         self.a = cfg.assistant
         self.room = room
         self.capture = capture
@@ -263,6 +265,11 @@ class AssistantSession:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
         self.capture.unsubscribe(self.audio_q)
+        if self.screen is not None and self.screen.active:
+            try:
+                await self.screen.stop()
+            except Exception:  # noqa: BLE001
+                log.warning("Falha ao parar o compartilhamento de tela", exc_info=True)
         if self.tracker is not None:
             self.tracker.close()
         if self.web is not None:
@@ -481,6 +488,30 @@ class AssistantSession:
             await self.reply(pid, private, P.LINK_PUBLIC_REFUSED)
             return
         await self.room.send_private(pid, P.LINK_PRIVATE.format(url=self.web.page_url()))
+
+    async def cmd_tela(self, pid, display, cmd, private) -> None:
+        if not self.policy.is_admin(pid, display):
+            await self.deny(pid, display, private, "compartilhar a tela")
+            return
+        if not self.a.screen_share or self.screen is None:
+            await self.reply(pid, private, P.SCREEN_DISABLED)
+            return
+        if cmd.arg.strip().lower() in ("off", "parar", "sair", "desligar"):
+            if not self.screen.active:
+                await self.reply(pid, private, P.SCREEN_NOT_ACTIVE)
+                return
+            await self.screen.stop()
+            await self.send_chat(P.SCREEN_OFF)
+            return
+        if self.web is None:
+            await self.reply(pid, private, P.LINK_UNAVAILABLE)
+            return
+        try:
+            ok = await self.screen.start(self.web.local_url())
+        except Exception:  # noqa: BLE001
+            log.warning("Falha ao compartilhar a tela", exc_info=True)
+            ok = False
+        await self.send_chat(P.SCREEN_ON if ok else P.SCREEN_FAILED)
 
     # ---- LLM: utilitários -------------------------------------------------
     async def with_thinking(self, fut, *, voice: bool, pid: str, private: bool):

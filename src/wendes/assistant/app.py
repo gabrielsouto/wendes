@@ -33,12 +33,13 @@ def build_session(
     web: bool = True,
     max_lag_s: float | None = None,
     vad_in_thread: bool = True,
+    screen=None,
 ) -> AssistantSession:
     """Cria a sessão e liga as funcionalidades do modo assist."""
     return AssistantSession(
         cfg, room, capture, run_dir,
         state=state, transcribe=transcribe, vad=vad, speak=speak, llm=llm, web=web,
-        max_lag_s=max_lag_s, vad_in_thread=vad_in_thread,
+        max_lag_s=max_lag_s, vad_in_thread=vad_in_thread, screen=screen,
     )
 
 

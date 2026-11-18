@@ -9,6 +9,7 @@ Comandos:
   resummarize  regera a ata de uma data a partir do histórico, sem reentrar na sala
   ask          pergunta sobre reuniões passadas (mesmo motor do assist, sem Jitsi)
   reindex      indexa o histórico para busca (FTS5)
+  send-actions reenvia o webhook de ações de uma reunião assist
 """
 from __future__ import annotations
 
@@ -527,6 +528,30 @@ def cmd_ask(question: str, date: str | None, hora: str | None) -> int:
     return 0
 
 
+def cmd_send_actions(date: str, hora: str | None) -> int:
+    cfg = load_config()
+
+    from wendes.assistant.actions import load_payload, post_actions
+    from wendes.history.store import HistoryStore
+
+    url = cfg.distribution.actions_webhook_url
+    if not url:
+        print("distribution.actions_webhook_url não configurado")
+        return 1
+    store = HistoryStore(cfg)
+    record = store.load_record(date, hora)
+    if record is None:
+        print(f"Nenhuma reunião registrada em {date} {hora or ''}".strip())
+        return 1
+    payload = load_payload(store.run_dir(date, record.started_at))
+    if payload is None:
+        print("Essa reunião não tem actions_payload.json (não foi no modo assist?)")
+        return 1
+    ok = post_actions(url, payload)
+    print("Enviado." if ok else "Falhou — veja o log.")
+    return 0 if ok else 1
+
+
 def cmd_reindex() -> int:
     cfg = load_config()
 
@@ -646,6 +671,9 @@ def main() -> None:
     p_ask.add_argument("--date", default=None, help="AAAA-MM-DD de uma reunião específica")
     p_ask.add_argument("--hora", default=None, help="HH:MM (com --date)")
     sub.add_parser("reindex", help="indexa o histórico para a busca das perguntas")
+    p_sa = sub.add_parser("send-actions", help="reenvia o webhook de ações de uma reunião")
+    p_sa.add_argument("date", help="AAAA-MM-DD")
+    p_sa.add_argument("--hora", default=None, help="HH:MM (default: a última do dia)")
     p_re = sub.add_parser("resummarize", help="regera a ata de uma data")
     p_re.add_argument("date", help="data no formato YYYY-MM-DD")
     p_re.add_argument(
@@ -675,6 +703,8 @@ def main() -> None:
         sys.exit(asyncio.run(_assist(args.max_hours, room_url=args.url)))
     if args.command == "ask":
         sys.exit(cmd_ask(args.question, args.date, args.hora))
+    if args.command == "send-actions":
+        sys.exit(cmd_send_actions(args.date, args.hora))
     if args.command == "reindex":
         sys.exit(cmd_reindex())
     if args.command == "resummarize":

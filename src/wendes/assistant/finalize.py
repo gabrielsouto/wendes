@@ -170,6 +170,51 @@ def build_ata(
     )
 
 
+def evidence_text(state: MeetingState, ts: float | None) -> str:
+    from wendes.assistant.state import mmss
+
+    if ts is None:
+        return ""
+    for seg in state.segments:
+        if not seg.marker and seg.start - 1 <= ts <= seg.end + 1:
+            return f"[{mmss(seg.start)}] {seg.text}"
+    return f"[{mmss(ts)}]"
+
+
+def save_actions(cfg: Config, store, run_dir: Path, record: MeetingRecord, state: MeetingState,
+                 room_url: str, distribute: bool) -> None:
+    """Grava action_items, resolve pendências, salva e envia o payload do webhook."""
+    from wendes.assistant.actions import (
+        ActionStore,
+        build_payload,
+        post_actions,
+        save_payload,
+    )
+
+    notes = load_notes(run_dir)
+    st = ActionStore(store.data_dir / "history.sqlite")
+    try:
+        db_ids = st.save_meeting(
+            date=record.date, started_at=record.started_at, room_url=room_url, notes=notes
+        )
+        evidence: dict[str, str] = {}
+        for p in notes.pendencias_anteriores:
+            if p.status in ("concluida", "cancelada") and p.db_id:
+                evidence[p.id] = evidence_text(state, p.evidencia_ts)
+                st.resolve(p.db_id, p.status, date=record.date, started_at=record.started_at,
+                           evidencia=evidence[p.id])
+    finally:
+        st.close()
+    payload = build_payload(
+        date=record.date, started_at=record.started_at, room_url=room_url,
+        team=cfg.team.name, notes=notes, db_ids=db_ids, evidence=evidence,
+    )
+    save_payload(run_dir, payload)
+    url = cfg.distribution.actions_webhook_url
+    if distribute and url:
+        post_actions(url, payload)
+
+
 def finalize_assist(
     cfg: Config,
     store,
@@ -189,7 +234,13 @@ def finalize_assist(
     duration = wav_seconds(wav_path) or (state.segments[-1].end if state.segments else 0.0)
     batch_transcript(cfg, run_dir, wav_path)
     ata = build_ata(cfg, llm, record, state, room_url=room_url, duration_s=duration)
-    return _save_and_distribute(cfg, store, run_dir, record, ata, distribute)
+    path = _save_and_distribute(cfg, store, run_dir, record, ata, distribute)
+    if store is not None:
+        try:
+            save_actions(cfg, store, run_dir, record, state, room_url or cfg.room.url, distribute)
+        except Exception:  # noqa: BLE001 — a ata já saiu; ações são acessórias
+            log.exception("Falha ao gravar/enviar as ações da reunião")
+    return path
 
 
 def _save_and_distribute(cfg, store, run_dir: Path, record, ata: str, distribute: bool,

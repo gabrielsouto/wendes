@@ -219,3 +219,21 @@ HISTORY_VOICE = "por voz não há como confirmar quem pergunta"
 HISTORY_UNKNOWN = "há participante fora da equipe na sala"
 HISTORY_NO_PERMISSION = "só para quem tem permissão, pelo chat"
 ASK_USAGE = "Uso: /wendes <pergunta> (ou @wendes <pergunta>, ou mensagem privada ao bot)."
+
+
+# ---- pendências (F5) -----------------------------------------------------------
+COBRAR_ASK = "{nome}, a pendência {descricao}, da reunião de {dia}, foi resolvida?"
+COBRAR_NONE = "Não há pendências anteriores com responsável para cobrar."
+COBRAR_START = "📋 Vou cobrar {n} pendência(s) por voz."
+COBRAR_RESULT = "{ref} ({descricao}): {resultado}"
+COBRAR_CLASSIFY = """Uma pessoa foi perguntada se a pendência abaixo foi resolvida. Classifique
+a resposta dela, que está na transcrição. "concluida" se disse que terminou/resolveu;
+"aberta" se disse que não terminou ou que ainda está fazendo; "sem_resposta" se não
+respondeu ou não dá para saber.
+
+Exemplo: {{"status": "concluida"}}
+
+Pendência: {descricao}
+<transcricao>
+{trechos}
+</transcricao>"""

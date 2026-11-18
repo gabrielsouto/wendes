@@ -150,6 +150,11 @@ class AssistantSession:
             self.segment_hooks.append(self._voice_hook)
         self._requests: set[asyncio.Task] = set()
 
+        # ---- pendências de reuniões anteriores (F5) -------------------------
+        self.prev_pending: list = []
+        if self.notes is not None:
+            self.notes.on_change = self._on_notes_change
+
         self.web = None
         if web:
             from wendes.assistant.web.server import WebServer
@@ -190,6 +195,7 @@ class AssistantSession:
                               self.a.web.port)
                 self.web = None
         await self.auth.publish_code()
+        await self.load_pending()
         self.scheduler.start()
         if self.notes is not None:
             self.spawn(self.notes.loop(), "notes")
@@ -693,6 +699,134 @@ class AssistantSession:
         if voice and self.a.voice_answers:
             await self.say(item["resposta_curta"] or item["resposta"][:200])
         return item
+
+    # ---- pendências (F5) ----------------------------------------------------
+    def _query_pending(self) -> list[dict]:
+        from wendes.assistant.actions import ActionStore
+
+        store = ActionStore(self.cfg.resolve(self.cfg.data_dir) / "history.sqlite")
+        try:
+            return store.open_items(
+                self.state.room_url or self.cfg.room.url,
+                date=self.state.date,
+                started_at=self.state.started_at,
+                lookback_days=self.cfg.actions.lookback_days,
+            )
+        finally:
+            store.close()
+
+    async def load_pending(self) -> None:
+        from wendes.assistant.actions import pending_chat, to_pending
+
+        if not self.state.date:
+            return
+        try:
+            rows = await asyncio.to_thread(self._query_pending)
+        except Exception:  # noqa: BLE001 — pendências são acessórias
+            log.exception("Falha ao carregar as pendências anteriores")
+            return
+        items = to_pending(rows)
+        self._set_pending(items)
+        log.info("%d pendência(s) anterior(es) carregada(s)", len(items))
+        if items:
+            await self.send_chat(pending_chat(items))
+
+    def _set_pending(self, items: list) -> None:
+        self.prev_pending = items
+        if self.notes is not None:
+            self.notes.set_prev_pending(items)  # dispara _on_notes_change
+        else:
+            self._publish_pending(items)
+
+    def _on_notes_change(self, notes) -> None:
+        self.prev_pending = notes.pendencias_anteriores
+        self._publish_pending(notes.pendencias_anteriores)
+
+    def _publish_pending(self, items: list) -> None:
+        import json
+
+        from wendes.assistant.actions import page_items
+
+        data = page_items(items)
+        if data != self.state.prev_actions:
+            self.state.set_prev_actions(data)
+            if self.state.persist:
+                self.state.path("prev_actions.json").write_text(
+                    json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8"
+                )
+
+    async def cmd_pendencias(self, pid, display, cmd, private) -> None:
+        from wendes.assistant.actions import pending_chat
+
+        if not self.policy.can_ask(pid, display):
+            await self.deny(pid, display, private, "ver as pendências")
+            return
+        await self.reply(pid, private, self.chat_text(pending_chat(self.prev_pending)))
+
+    async def cmd_cobrar(self, pid, display, cmd, private) -> None:
+        """Lê por voz as pendências com responsável, escuta 20 s e classifica."""
+        if not self.policy.is_admin(pid, display):
+            await self.deny(pid, display, private, "cobrar as pendências")
+            return
+        targets = [p for p in self.prev_pending
+                   if p.responsavel and p.status not in ("concluida", "cancelada")]
+        if not targets or self.speak_fn is None:
+            await self.reply(pid, private, P.COBRAR_NONE if not targets else P.NOT_AVAILABLE)
+            return
+        self.spawn_request(self._cobrar(targets))
+
+    async def _cobrar(self, targets: list, listen_s: float = 20.0,
+                      settle_s: float | None = None) -> None:
+        from wendes.assistant.actions import weekday_pt
+        from wendes.assistant.notes import Op, apply_ops
+
+        await self.send_chat(P.COBRAR_START.format(n=len(targets)))
+        for p in targets:
+            await self.say(P.COBRAR_ASK.format(
+                nome=p.responsavel, descricao=p.descricao, dia=weekday_pt(p.meeting_date)))
+            start = self.capture.position_s
+            while self.capture.position_s < start + listen_s and not self.finished.is_set():
+                await asyncio.sleep(0.5)
+            # espera o STT ao vivo alcançar o fim da resposta
+            await asyncio.sleep(min(5.0, self.a.stt.silence_s + 1.0) if settle_s is None
+                                else settle_s)
+            segs = [s for s in self.state.segments
+                    if s.start >= start and s.source != "bot" and not s.marker]
+            status = "sem_resposta"
+            if segs and self.llm is not None:
+                status = await self._classify_reply(p.descricao, segs)
+            if status in ("concluida", "mencionada") and self.notes is not None:
+                op = Op(op="update_action", id=p.id, status=status, ts=segs[0].start)
+                apply_ops(self.notes.notes, [op])
+                self.notes.save([{"op": "update_action", "id": p.id, "status": status,
+                                  "via": "/cobrar"}])
+            resultado = {"concluida": "resolvida ✔", "aberta": "ainda aberta",
+                         "mencionada": "ainda aberta"}.get(status, "sem resposta")
+            await self.send_chat(P.COBRAR_RESULT.format(
+                ref=p.id, descricao=p.descricao, resultado=resultado))
+
+    async def _classify_reply(self, descricao: str, segs: list) -> str:
+        from typing import Literal
+
+        class Classif(BaseModel):
+            status: Literal["concluida", "aberta", "sem_resposta"] = "sem_resposta"
+
+        prompt = P.COBRAR_CLASSIFY.format(
+            descricao=descricao, trechos="\n".join(s.line("não identificado") for s in segs))
+        llm_cfg = self.cfg.llm
+        fut = self.scheduler.submit(
+            HUMAN, "cobrar",
+            lambda: ask_json(self.llm, prompt, Classif, system=self.system,
+                             mode=llm_cfg.structured_output, vllm_key=llm_cfg.vllm_guided_key,
+                             max_tokens=30),
+        )
+        try:
+            out = await fut
+        except Exception:  # noqa: BLE001
+            return "sem_resposta"
+        if out is None:
+            return "sem_resposta"
+        return "mencionada" if out.status == "aberta" else out.status
 
     async def cmd_fim(self, pid, display, cmd, private) -> None:
         if not self.policy.is_admin(pid, display):

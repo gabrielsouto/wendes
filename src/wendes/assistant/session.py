@@ -21,13 +21,14 @@ from wendes.assistant.policy import Policy
 from wendes.assistant.speakers import SpeakerTracker
 from wendes.assistant.state import GAP_TEXT, MeetingState, Segment, mmss
 from wendes.assistant.transcriber import ContinuousTranscriber, TranscribeFn, VadFn
-from wendes.assistant.triggers import Command, parse_chat
+from wendes.assistant.triggers import Command, VoiceTrigger, parse_chat
 from wendes.config import Config
 from wendes.facilitator.auth import AdminAuth
 
 log = logging.getLogger(__name__)
 
 ROSTER_POLL_SECONDS = 15.0
+THINKING_AFTER_S = 2.0  # passou disso sem resposta: sinal imediato
 
 
 class Recap(BaseModel):
@@ -141,6 +142,14 @@ class AssistantSession:
             )
             self.segment_hooks.append(self.notes.on_segment)
 
+        # ---- perguntas por voz ---------------------------------------------
+        self.voice: VoiceTrigger | None = None
+        if self.a.voice_trigger:
+            wake = [self.a.wake_word or self.bot_name, *self.a.wake_word_aliases]
+            self.voice = VoiceTrigger(wake)
+            self.segment_hooks.append(self._voice_hook)
+        self._requests: set[asyncio.Task] = set()
+
         self.web = None
         if web:
             from wendes.assistant.web.server import WebServer
@@ -225,6 +234,9 @@ class AssistantSession:
         self.state.llm_queue = size
 
     async def stop(self) -> None:
+        for task in list(self._requests):
+            task.cancel()
+        await asyncio.gather(*self._requests, return_exceptions=True)
         if self.notes is not None:
             await self.notes.final_round()  # o que sobrou da transcrição ao vivo
             await self.notes.close()
@@ -458,7 +470,7 @@ class AssistantSession:
     async def with_thinking(self, fut, *, voice: bool, pid: str, private: bool):
         """Espera o resultado; passando de 2 s, dá um sinal imediato (chat ou voz)."""
         task = asyncio.ensure_future(fut)
-        done, _ = await asyncio.wait({task}, timeout=2.0)
+        done, _ = await asyncio.wait({task}, timeout=THINKING_AFTER_S)
         if not done:
             if voice and self.a.voice_answers and self.speak_fn is not None:
                 await self.say(P.THINKING_VOICE)
@@ -513,6 +525,174 @@ class AssistantSession:
 
         notes = self.notes.notes if self.notes is not None else Notes()
         await self.reply(pid, private, self.chat_text(actions_text(notes)))
+
+    # ---- perguntas e pedidos (F3) -----------------------------------------
+    def spawn_request(self, coro) -> asyncio.Task:
+        task = asyncio.create_task(coro)
+        self._requests.add(task)
+
+        def done(t: asyncio.Task) -> None:
+            self._requests.discard(t)
+            if not t.cancelled() and t.exception() is not None:
+                log.error("Falha num pedido ao assistente", exc_info=t.exception())
+
+        task.add_done_callback(done)
+        return task
+
+    async def _voice_hook(self, seg: Segment) -> None:
+        if self.voice is None or seg.source == "bot" or seg.marker:
+            return
+        req = self.voice.check(seg.start, seg.end, seg.text, seg.speaker)
+        if req is None or not self.policy.can_voice_ask():
+            return
+        log.info("Ativação por voz no segmento %d", seg.id)
+        self.spawn_request(
+            self.handle_request(req.text, pid="", display=seg.speaker, private=False, voice=True)
+        )
+
+    async def cmd_ask(self, pid, display, cmd: Command, private) -> None:
+        if not self.policy.can_ask(pid, display):
+            await self.deny(pid, display, private, "fazer perguntas ao assistente")
+            return
+        if not cmd.arg.strip():
+            await self.reply(pid, private, P.ASK_USAGE)
+            return
+        await self.handle_request(cmd.arg, pid=pid, display=display, private=private, voice=False)
+
+    async def route(self, text: str) -> str:
+        from wendes.assistant.qa import route_keywords, route_llm
+
+        intent = route_keywords(text)
+        if intent is not None or self.llm is None:
+            return intent or "pergunta"
+        llm_cfg = self.cfg.llm
+        fut = self.scheduler.submit(
+            HUMAN, "roteador",
+            lambda: route_llm(self.llm, text, system=self.system,
+                              mode=llm_cfg.structured_output, vllm_key=llm_cfg.vllm_guided_key),
+            est_tokens=est(text, 30),
+        )
+        try:
+            return await fut
+        except Exception:  # noqa: BLE001
+            return "pergunta"
+
+    async def handle_request(self, text: str, *, pid: str, display: str, private: bool,
+                             voice: bool) -> None:
+        intent = await self.route(text)
+        log.info("Pedido roteado como %s (%s)", intent, "voz" if voice else "chat")
+        if intent == "resumo":
+            await self.cmd_resumo(pid, display, Command("resumo"), private, voice=voice)
+        elif intent == "acoes":
+            await self.cmd_acoes(pid, display, Command("acoes"), private)
+        elif intent in ("documento", "diagrama", "cronograma", "checklist", "tabela") and hasattr(
+            self, "request_artifact"
+        ):
+            await self.request_artifact(
+                intent, text, pid=pid, display=display, private=private, voice=voice
+            )
+        else:
+            await self.ask_question(text, pid=pid, display=display, private=private, voice=voice)
+
+    def _qa_context(self, question: str, history_ok: bool):
+        """Monta o contexto (roda na thread do LLM: inclui consulta ao SQLite)."""
+        from wendes.assistant.budget import estimate_tokens
+        from wendes.assistant.notes import Notes, compact_view
+        from wendes.assistant.qa import QAContext, history_context, mentions_past
+        from wendes.assistant.search import open_db, search_segments
+
+        notes = self.notes.notes if self.notes is not None else Notes()
+        segs = [s for s in list(self.state.segments) if not s.marker]
+        cap = int(self.cfg.llm.context_tokens * 0.35)
+        recent, used = [], 0
+        for s in reversed(segs):
+            line = s.line("não identificado")
+            used += estimate_tokens(line) + 1
+            if used > cap:
+                break
+            recent.append(s)
+        recent.reverse()
+        first_recent = recent[0].id if recent else None
+        blocks = search_segments(segs, question, skip_from_id=first_recent)
+        retrieved = [s.line("não identificado") for b in blocks for s in b]
+        history: list[str] = []
+        if history_ok and (mentions_past(question) or not blocks):
+            try:
+                db = open_db(self.cfg.resolve(self.cfg.data_dir))
+                try:
+                    history = history_context(db, question)
+                finally:
+                    db.close()
+            except Exception:  # noqa: BLE001 — histórico é acessório
+                log.warning("Falha ao consultar o histórico", exc_info=True)
+        return QAContext(
+            notes=compact_view(notes, last_points=6),
+            recent=[s.line("não identificado") for s in recent],
+            retrieved=retrieved,
+            history=history,
+        )
+
+    async def ask_question(self, question: str, *, pid: str, display: str, private: bool,
+                           voice: bool) -> dict | None:
+        from wendes.assistant.qa import answer, clean_citations, mentions_past, short_question
+
+        who = display or ("alguém na sala (não identificado)" if voice else "Participante")
+        ts = self.capture.position_s
+        if self.llm is None:
+            await self.reply(pid, private, P.LLM_DOWN)
+            return None
+        history_ok = self.a.permissions.history != "none" and self.policy.can_history(
+            pid, display, via_voice=voice, unknown_present=self.unknown_present
+        )
+        blocked = ""
+        if mentions_past(question) and not history_ok:
+            motivo = (P.HISTORY_VOICE if voice else
+                      P.HISTORY_UNKNOWN if self.unknown_present else P.HISTORY_NO_PERMISSION)
+            blocked = "\n" + P.HISTORY_BLOCKED.format(motivo=motivo)
+        llm_cfg = self.cfg.llm
+
+        def job():
+            ctx = self._qa_context(question, history_ok)
+            return answer(
+                self.llm, question, who, ctx, context_tokens=llm_cfg.context_tokens,
+                system=self.system, mode=llm_cfg.structured_output,
+                vllm_key=llm_cfg.vllm_guided_key,
+            )
+
+        fut = self.scheduler.submit(HUMAN, "pergunta", job,
+                                    est_tokens=llm_cfg.context_tokens)
+        try:
+            out = await self.with_thinking(fut, voice=voice, pid=pid, private=private)
+        except Exception:  # noqa: BLE001
+            log.warning("Pergunta sem resposta do LLM", exc_info=True)
+            out = None
+        if out is None:
+            await self.reply(pid, private, P.NO_ANSWER)
+            if voice and self.a.voice_answers:
+                await self.say(P.NO_ANSWER)
+            return None
+        max_ts = self.capture.position_s or None
+        item = {
+            "id": len(self.state.qa) + 1,
+            "ts": round(ts, 1),
+            "quem": who,
+            "pergunta": question,
+            "via": "voz" if voice else ("privado" if private else "chat"),
+            "privada": private,
+            "resposta": out.resposta.strip(),
+            "resposta_curta": out.resposta_curta.strip(),
+            "citacoes": clean_citations(out, max_ts),
+        }
+        self.state.add_qa(item)
+        log.info("Pergunta %d respondida (%s, %d caracteres)", item["id"], item["via"],
+                 len(item["resposta"]))
+        await self.reply(
+            pid, private,
+            self.chat_text(f"↳ {who}: {short_question(question)}\n{item['resposta']}{blocked}"),
+        )
+        if voice and self.a.voice_answers:
+            await self.say(item["resposta_curta"] or item["resposta"][:200])
+        return item
 
     async def cmd_fim(self, pid, display, cmd, private) -> None:
         if not self.policy.is_admin(pid, display):

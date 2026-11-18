@@ -166,3 +166,56 @@ pessoas que não estejam nas notas. Responda só com o texto do resumo.
 <notas>
 {notas}
 </notas>"""
+
+
+# ---- perguntas (F3) ---------------------------------------------------------------
+QA = """Responda à pergunta de {quem} usando SOMENTE o contexto abaixo (notas, transcrição
+desta reunião, trechos recuperados e, se houver, reuniões anteriores).
+- Se a resposta não estiver no contexto, diga claramente que não sabe ou que isso não
+  foi dito. Não invente.
+- Cite os trechos usados com o tempo [mm:ss]; de reuniões anteriores, inclua a data.
+- Não atribua falas a pessoas além do falante identificado ou do nome dito na fala.
+- "resposta_curta": no máximo 2 frases, para falar em voz alta (sem markdown).
+- "resposta": markdown completo e objetivo.
+
+Exemplo: {{"resposta_curta": "A Fulana ficou de revisar o PR até sexta.",
+"resposta": "A **Fulana** ficou de revisar o PR até sexta [13:32].",
+"citacoes": [{{"ts": "13:32"}}, {{"data": "2026-07-03", "ts": "05:00"}}]}}
+
+<pedido>
+{pergunta}
+</pedido>
+
+<notas>
+{notas}
+</notas>
+
+<transcricao>
+{recente}
+</transcricao>
+
+<transcricao>
+Trechos anteriores desta reunião relacionados à pergunta:
+{recuperado}
+</transcricao>
+
+<historico>
+{historico}
+</historico>"""
+
+ROUTER = """Classifique o pedido feito ao assistente da reunião em UMA intenção:
+pergunta (quer uma informação), documento (criar/atualizar um documento ou plano),
+diagrama (desenhar fluxo/diagrama), cronograma (linha do tempo/gantt), checklist
+(lista de tarefas), resumo (recap da reunião), acoes (listar as ações), outro.
+
+Exemplo: {{"intencao": "pergunta"}}
+
+<pedido>
+{pedido}
+</pedido>"""
+
+HISTORY_BLOCKED = "(Não consultei reuniões anteriores: {motivo}.)"
+HISTORY_VOICE = "por voz não há como confirmar quem pergunta"
+HISTORY_UNKNOWN = "há participante fora da equipe na sala"
+HISTORY_NO_PERMISSION = "só para quem tem permissão, pelo chat"
+ASK_USAGE = "Uso: /wendes <pergunta> (ou @wendes <pergunta>, ou mensagem privada ao bot)."

@@ -198,7 +198,10 @@ def _save_and_distribute(cfg, store, run_dir: Path, record, ata: str, distribute
     from wendes.distribution.webhook import post_ata
 
     if store is not None:
+        from wendes.assistant.search import index_safely
+
         ata_path = store.save(record, ata)
+        index_safely(store.data_dir, run_dir, record.date, record.started_at)
     else:
         ata_path = run_dir / "ata.md"
         ata_path.write_text(ata, encoding="utf-8")

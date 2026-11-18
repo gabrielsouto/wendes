@@ -7,6 +7,8 @@ Comandos:
   stealth      entra mudo e só grava/transcreve; /fim no chat encerra e envia a ata
   assist       assistente visível: transcreve, mantém notas, responde e cria artefatos
   resummarize  regera a ata de uma data a partir do histórico, sem reentrar na sala
+  ask          pergunta sobre reuniões passadas (mesmo motor do assist, sem Jitsi)
+  reindex      indexa o histórico para busca (FTS5)
 """
 from __future__ import annotations
 
@@ -494,6 +496,49 @@ async def _assist_replay(date: str, hora: str | None, speed: float) -> int:
     return 0
 
 
+def cmd_ask(question: str, date: str | None, hora: str | None) -> int:
+    cfg = load_config()
+
+    from wendes.assistant.qa import offline_answer
+    from wendes.assistant.state import mmss
+    from wendes.history.store import HistoryStore
+    from wendes.llm.client import Llm
+
+    store = HistoryStore(cfg)
+    try:
+        out, scope = offline_answer(cfg, Llm(cfg), store, question, date, hora)
+    except Exception as exc:  # noqa: BLE001
+        print(f"LLM indisponível: {exc}")
+        return 1
+    if out is None:
+        print(f"Não consegui responder ({scope}).")
+        return 1
+    print(f"[{scope}]\n")
+    print(out.resposta.strip())
+    from wendes.assistant.notes import parse_ts
+
+    cites = []
+    for c in out.citacoes:
+        ts = parse_ts(c.ts)
+        when = mmss(ts) if ts is not None else ""
+        cites.append(f"{c.data or ''} {when}".strip())
+    if cites:
+        print("\nCitações: " + ", ".join(cites))
+    return 0
+
+
+def cmd_reindex() -> int:
+    cfg = load_config()
+
+    from wendes.assistant.search import reindex_all
+    from wendes.history.store import HistoryStore
+
+    HistoryStore(cfg)  # garante o schema
+    meetings, segs = reindex_all(cfg.resolve(cfg.data_dir))
+    print(f"Indexadas {meetings} reuniões ({segs} segmentos)")
+    return 0
+
+
 def datetime_now_slug() -> str:
     from datetime import datetime
 
@@ -596,6 +641,11 @@ def main() -> None:
         "--speed", type=float, default=1.0,
         help="ritmo do replay (1 = tempo real, 4 = 4x, 0 = o mais rápido possível)",
     )
+    p_ask = sub.add_parser("ask", help="pergunta sobre reuniões passadas")
+    p_ask.add_argument("question", help="a pergunta, entre aspas")
+    p_ask.add_argument("--date", default=None, help="AAAA-MM-DD de uma reunião específica")
+    p_ask.add_argument("--hora", default=None, help="HH:MM (com --date)")
+    sub.add_parser("reindex", help="indexa o histórico para a busca das perguntas")
     p_re = sub.add_parser("resummarize", help="regera a ata de uma data")
     p_re.add_argument("date", help="data no formato YYYY-MM-DD")
     p_re.add_argument(
@@ -623,6 +673,10 @@ def main() -> None:
         if args.replay:
             sys.exit(asyncio.run(_assist_replay(args.replay, args.hora, args.speed)))
         sys.exit(asyncio.run(_assist(args.max_hours, room_url=args.url)))
+    if args.command == "ask":
+        sys.exit(cmd_ask(args.question, args.date, args.hora))
+    if args.command == "reindex":
+        sys.exit(cmd_reindex())
     if args.command == "resummarize":
         sys.exit(
             cmd_resummarize(

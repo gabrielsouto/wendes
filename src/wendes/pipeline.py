@@ -94,6 +94,9 @@ def finalize_meeting(
         ata = generate_ata(cfg, llm, record, transcript)
     ata_path = store.save(record, ata)
     log.info("Ata salva em %s", ata_path)
+    from wendes.assistant.search import index_safely
+
+    index_safely(store.data_dir, run_dir, record.date, record.started_at)
 
     try:
         send_ata(cfg, ata, record.date)
